@@ -1,9 +1,6 @@
 // background.js — service worker
-// Auto-enriches every saved lead with emails/phones by visiting the actual page.
-// Handles obfuscated emails, contact pages, JSON-LD, and HTML entities.
-
-const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+// Uses a hidden minimized window to actually LOAD each page in a real browser tab.
+// This bypasses CORS, bot blocks, and JS-only sites — same as you visiting it manually.
 
 // ----- Export helpers -----
 function csvEscape(v) {
@@ -36,132 +33,211 @@ function downloadText(text, filename, mime) {
   return chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
 }
 
-// ===== Contact extraction logic =====
+// ===== Hidden scraping window =====
+let scrapingWindowId = null;
 
-function decodeHtmlEntities(text) {
-  text = text.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
-  text = text.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
-  const map = {
-    "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
-    "&nbsp;": " ", "&apos;": "'"
-  };
-  return text.replace(/&[a-z]+;/gi, m => map[m] || m);
-}
-
-function deobfuscateEmail(text) {
-  return text
-    .replace(/\s*\[\s*at\s*\]\s*/gi, "@")
-    .replace(/\s*\(\s*at\s*\)\s*/gi, "@")
-    .replace(/\s+at\s+/gi, "@")
-    .replace(/\s*\[\s*dot\s*\]\s*/gi, ".")
-    .replace(/\s*\(\s*dot\s*\)\s*/gi, ".")
-    .replace(/\s+dot\s+/gi, ".");
-}
-
-// Cloudflare-style email obfuscation
-function decodeCfEmail(hex) {
-  try {
-    const r = parseInt(hex.substr(0, 2), 16);
-    let email = "";
-    for (let i = 2; i < hex.length; i += 2) {
-      email += String.fromCharCode(parseInt(hex.substr(i, 2), 16) ^ r);
+async function getScrapingWindow() {
+  if (scrapingWindowId !== null) {
+    try {
+      await chrome.windows.get(scrapingWindowId);
+      return scrapingWindowId;
+    } catch (_) {
+      scrapingWindowId = null;
     }
-    return email;
-  } catch (_) { return ""; }
+  }
+  const win = await chrome.windows.create({
+    url: "about:blank",
+    focused: false,
+    state: "minimized",
+    type: "normal",
+    width: 800,
+    height: 600
+  });
+  scrapingWindowId = win.id;
+  // Keep it minimized
+  try {
+    await chrome.windows.update(win.id, { state: "minimized", focused: false });
+  } catch (_) {}
+  return win.id;
 }
 
-function extractContactsFromHtml(html) {
+async function closeScrapingWindow() {
+  if (scrapingWindowId !== null) {
+    try { await chrome.windows.remove(scrapingWindowId); } catch (_) {}
+    scrapingWindowId = null;
+  }
+}
+
+// ===== Page extraction (runs in target page context) =====
+// This function is injected into each loaded page; it has full access to the rendered DOM.
+function __extractContactsInPage() {
+  const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
+  const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+
   const emails = new Set();
   const phones = new Set();
 
-  // 1) mailto: and tel: links
-  Array.from(html.matchAll(/mailto:([^"'>\s?&]+)/gi))
-    .forEach(m => {
-      try { emails.add(decodeURIComponent(m[1]).toLowerCase()); }
-      catch (_) { emails.add(m[1].toLowerCase()); }
-    });
-  Array.from(html.matchAll(/tel:([^"'>\s?&]+)/gi))
-    .forEach(m => {
-      try { phones.add(decodeURIComponent(m[1])); }
-      catch (_) { phones.add(m[1]); }
-    });
+  // 1) mailto: and tel: links from the rendered DOM
+  document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
+    let e = a.getAttribute("href").replace(/^mailto:/i, "").split("?")[0];
+    try { e = decodeURIComponent(e); } catch (_) {}
+    if (e && /@/.test(e)) emails.add(e.toLowerCase());
+  });
+  document.querySelectorAll('a[href^="tel:"]').forEach(a => {
+    let p = a.getAttribute("href").replace(/^tel:/i, "");
+    try { p = decodeURIComponent(p); } catch (_) {}
+    if (p) phones.add(p);
+  });
 
-  // 2) Cloudflare obfuscated emails
-  Array.from(html.matchAll(/data-cfemail=["']([0-9a-f]+)["']/gi))
-    .forEach(m => {
-      const decoded = decodeCfEmail(m[1]);
-      if (decoded && /@/.test(decoded)) emails.add(decoded.toLowerCase());
-    });
+  // 2) Cloudflare-obfuscated emails
+  document.querySelectorAll("[data-cfemail]").forEach(el => {
+    const hex = el.getAttribute("data-cfemail");
+    if (!hex) return;
+    try {
+      const r = parseInt(hex.substr(0, 2), 16);
+      let email = "";
+      for (let i = 2; i < hex.length; i += 2) {
+        email += String.fromCharCode(parseInt(hex.substr(i, 2), 16) ^ r);
+      }
+      if (/@/.test(email)) emails.add(email.toLowerCase());
+    } catch (_) {}
+  });
 
-  // 3) JSON-LD structured data
-  Array.from(html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi))
-    .forEach(m => {
-      try {
-        const data = JSON.parse(m[1].trim());
-        const collect = (o) => {
-          if (!o) return;
-          if (typeof o === "string") return;
-          if (Array.isArray(o)) { o.forEach(collect); return; }
-          if (typeof o === "object") {
-            if (o.email && typeof o.email === "string") emails.add(o.email.toLowerCase());
-            if (o.telephone && typeof o.telephone === "string") phones.add(String(o.telephone));
-            if (o.contactPoint) collect(o.contactPoint);
-            Object.values(o).forEach(collect);
-          }
-        };
-        collect(data);
-      } catch (_) {}
-    });
+  // 3) JSON-LD
+  document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+    try {
+      const data = JSON.parse(s.textContent);
+      const collect = (o) => {
+        if (!o || typeof o !== "object") return;
+        if (Array.isArray(o)) { o.forEach(collect); return; }
+        if (o.email && typeof o.email === "string") emails.add(o.email.toLowerCase());
+        if (o.telephone && typeof o.telephone === "string") phones.add(String(o.telephone));
+        Object.values(o).forEach(collect);
+      };
+      collect(data);
+    } catch (_) {}
+  });
 
-  // 4) Strip scripts/styles, decode entities, then regex
-  let textHtml = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ");
-  let text = textHtml.replace(/<[^>]+>/g, " ");
-  text = decodeHtmlEntities(text);
-  const deob = deobfuscateEmail(text);
+  // 4) Visible text from rendered DOM (after JS executed)
+  const bodyText = (document.body && document.body.innerText) || "";
+  (bodyText.match(EMAIL_RE) || []).forEach(e => {
+    const lo = e.toLowerCase();
+    if (!/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|woff2?|ttf|mp4)$/i.test(lo)) {
+      emails.add(lo);
+    }
+  });
+  (bodyText.match(PHONE_RE) || []).forEach(p => {
+    const trimmed = p.trim();
+    const digits = trimmed.replace(/\D/g, "");
+    if (digits.length >= 8 && digits.length <= 15) phones.add(trimmed);
+  });
 
-  [text, deob].forEach(t => {
-    (t.match(EMAIL_RE) || []).forEach(e => {
+  // 5) Deobfuscate "user [at] domain [dot] com" style
+  const deob = bodyText
+    .replace(/\s*\[\s*at\s*\]\s*/gi, "@")
+    .replace(/\s*\(\s*at\s*\)\s*/gi, "@")
+    .replace(/\s*\{\s*at\s*\}\s*/gi, "@")
+    .replace(/\s+at\s+(?=[a-zA-Z])/gi, "@")
+    .replace(/\s*\[\s*dot\s*\]\s*/gi, ".")
+    .replace(/\s*\(\s*dot\s*\)\s*/gi, ".")
+    .replace(/\s*\{\s*dot\s*\}\s*/gi, ".")
+    .replace(/\s+dot\s+/gi, ".");
+  (deob.match(EMAIL_RE) || []).forEach(e => emails.add(e.toLowerCase()));
+
+  // 6) Also scan raw HTML for stuff hidden in attributes
+  try {
+    const html = document.documentElement.outerHTML;
+    (html.match(EMAIL_RE) || []).forEach(e => {
       const lo = e.toLowerCase();
-      if (!/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|woff2?|ttf)$/i.test(lo)) {
+      if (!/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|woff2?|ttf|mp4)$/i.test(lo)
+          && !/sentry|wixpress|@x\.com$/i.test(lo)) {
         emails.add(lo);
       }
     });
-    (t.match(PHONE_RE) || []).forEach(p => {
-      const trimmed = p.trim();
-      const digits = trimmed.replace(/\D/g, "");
-      if (digits.length >= 8 && digits.length <= 15) phones.add(trimmed);
-    });
-  });
+  } catch (_) {}
 
   // Filter junk
-  const blockEmail = /(sentry|wixpress|example\.com|test@test|noreply@example|yoursite|yourdomain|your-email|@x\.com$)/i;
+  const blockEmail = /(sentry|wixpress|example\.com|test@test|noreply@example|yoursite|yourdomain|your-email|@x\.com$|^[0-9a-f]{16,}@)/i;
+
   return {
-    emails: Array.from(emails).filter(e => !blockEmail.test(e) && e.length < 80),
-    phones: Array.from(phones).slice(0, 10)
+    emails: Array.from(emails).filter(e => !blockEmail.test(e) && e.length < 80 && e.length > 5),
+    phones: Array.from(phones).filter(p => p.length < 30).slice(0, 15)
   };
 }
 
-async function fetchPage(url) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 12000);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: "follow",
-      headers: { "Accept": "text/html,application/xhtml+xml,*/*" }
-    });
-    if (!res.ok) return null;
-    const ct = res.headers.get("content-type") || "";
-    if (ct && !ct.includes("text/html") && !ct.includes("application/xhtml") && !ct.includes("text/plain")) {
-      return null;
+// Wait for a tab to finish loading (or timeout)
+function waitForTabLoad(tabId, timeoutMs = 18000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (status) => {
+      if (done) return;
+      done = true;
+      try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
+      try { chrome.tabs.onRemoved.removeListener(removedListener); } catch (_) {}
+      clearTimeout(timer);
+      resolve(status);
+    };
+    function listener(updatedTabId, info) {
+      if (updatedTabId !== tabId) return;
+      if (info.status === "complete") {
+        // Give JS a moment to finish (lazy-loaded content, etc.)
+        setTimeout(() => finish("complete"), 1500);
+      }
     }
-    return await res.text();
-  } catch (_) { return null; }
-  finally { clearTimeout(t); }
+    function removedListener(removedTabId) {
+      if (removedTabId === tabId) finish("removed");
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.onRemoved.addListener(removedListener);
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
+  });
 }
 
+async function extractFromUrlViaTab(url) {
+  let tabId = null;
+  try {
+    const winId = await getScrapingWindow();
+    const tab = await chrome.tabs.create({
+      windowId: winId,
+      url: url,
+      active: false
+    });
+    tabId = tab.id;
+
+    const status = await waitForTabLoad(tabId);
+    if (status === "removed") return { emails: [], phones: [] };
+
+    // Try to inject extraction script
+    let result = { emails: [], phones: [] };
+    try {
+      const out = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: __extractContactsInPage,
+        world: "MAIN"
+      });
+      if (out && out[0] && out[0].result) result = out[0].result;
+    } catch (e) {
+      // Try ISOLATED world if MAIN failed
+      try {
+        const out = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: __extractContactsInPage
+        });
+        if (out && out[0] && out[0].result) result = out[0].result;
+      } catch (_) {}
+    }
+
+    return result;
+  } catch (e) {
+    return { emails: [], phones: [] };
+  } finally {
+    if (tabId !== null) {
+      try { await chrome.tabs.remove(tabId); } catch (_) {}
+    }
+  }
+}
+
+// Build candidate contact URLs from a base URL
 function contactCandidates(baseUrl) {
   try {
     const u = new URL(baseUrl);
@@ -171,7 +247,9 @@ function contactCandidates(baseUrl) {
       origin + "/contact-us",
       origin + "/contactus",
       origin + "/about",
-      origin + "/about-us"
+      origin + "/about-us",
+      origin + "/en/contact",
+      origin + "/en/about"
     ];
   } catch (_) { return []; }
 }
@@ -182,22 +260,18 @@ async function enrichLead(lead) {
     phones: new Set(lead.phones || [])
   };
 
-  // Visit the lead URL itself first
-  const html = await fetchPage(lead.url);
-  if (html) {
-    const got = extractContactsFromHtml(html);
-    got.emails.forEach(e => found.emails.add(e));
-    got.phones.forEach(p => found.phones.add(p));
-  }
+  // 1) Visit the lead URL itself in a real tab
+  const main = await extractFromUrlViaTab(lead.url);
+  main.emails.forEach(e => found.emails.add(e));
+  main.phones.forEach(p => found.phones.add(p));
 
-  // If still missing, try common contact pages on same domain
+  // 2) If still nothing, try one contact page (avoid opening too many tabs)
   if (found.emails.size === 0 || found.phones.size === 0) {
-    for (const candidate of contactCandidates(lead.url)) {
-      const h = await fetchPage(candidate);
-      if (!h) continue;
-      const got = extractContactsFromHtml(h);
-      got.emails.forEach(e => found.emails.add(e));
-      got.phones.forEach(p => found.phones.add(p));
+    const candidates = contactCandidates(lead.url);
+    for (const candidate of candidates.slice(0, 3)) {
+      const r = await extractFromUrlViaTab(candidate);
+      r.emails.forEach(e => found.emails.add(e));
+      r.phones.forEach(p => found.phones.add(p));
       if (found.emails.size > 0 && found.phones.size > 0) break;
     }
   }
@@ -205,7 +279,7 @@ async function enrichLead(lead) {
   lead.emails = Array.from(found.emails);
   lead.phones = Array.from(found.phones);
   lead.deepScrapedAt = new Date().toISOString();
-  return (found.emails.size + found.phones.size);
+  return found.emails.size + found.phones.size;
 }
 
 async function setProgress(patch) {
@@ -215,97 +289,72 @@ async function setProgress(patch) {
   });
 }
 
-// Auto-enrich newly added leads (called after every Google page scrape)
+// Sequential processing — much more reliable than concurrent for tab-based scraping
+async function enrichLeadsSequential(leadsList, opts = {}) {
+  const { title = "Finding emails & phones..." } = opts;
+
+  await setProgress({
+    isRunning: true,
+    title,
+    currentPage: 0,
+    totalPages: leadsList.length,
+    totalFound: 0,
+    currentItem: ""
+  });
+
+  let totalContacts = 0;
+  for (let i = 0; i < leadsList.length; i++) {
+    const lead = leadsList[i];
+    await setProgress({
+      currentPage: i + 1,
+      currentItem: `Visiting ${lead.domain || lead.url}`
+    });
+
+    const before = (lead.emails || []).length + (lead.phones || []).length;
+    try {
+      await enrichLead(lead);
+    } catch (e) {
+      console.warn("enrich failed", lead.url, e);
+    }
+    const after = (lead.emails || []).length + (lead.phones || []).length;
+    totalContacts += Math.max(0, after - before);
+
+    await setProgress({ totalFound: totalContacts });
+
+    // Persist after every lead (so user sees live progress)
+    const { leads = [] } = await chrome.storage.local.get(["leads"]);
+    const idx = leads.findIndex(l => l.url === lead.url);
+    if (idx !== -1) {
+      leads[idx] = lead;
+      await chrome.storage.local.set({ leads });
+    }
+  }
+
+  await setProgress({
+    isRunning: false,
+    currentItem: `Done. Got ${totalContacts} contact(s).`
+  });
+  setTimeout(async () => {
+    await chrome.storage.local.set({ progress: { isRunning: false } });
+  }, 4000);
+
+  // Clean up the hidden window when done
+  await closeScrapingWindow();
+
+  return { ok: true, totalContacts, processed: leadsList.length };
+}
+
 async function autoEnrichLeads(urls) {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
   const targets = leads.filter(l => urls.includes(l.url) && !l.deepScrapedAt);
-  if (!targets.length) return { ok: true, enriched: 0 };
-
-  await setProgress({
-    isRunning: true,
-    title: "Finding emails & phones...",
-    currentPage: 0,
-    totalPages: targets.length,
-    totalFound: 0,
-    currentItem: ""
-  });
-
-  let processed = 0;
-  let totalContacts = 0;
-  const BATCH = 3;
-  for (let i = 0; i < targets.length; i += BATCH) {
-    const batch = targets.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (lead) => {
-      processed++;
-      await setProgress({
-        currentPage: processed,
-        currentItem: `Visiting: ${lead.domain || lead.url}`
-      });
-      const before = (lead.emails || []).length + (lead.phones || []).length;
-      await enrichLead(lead);
-      const after = (lead.emails || []).length + (lead.phones || []).length;
-      totalContacts += Math.max(0, after - before);
-      await setProgress({ totalFound: totalContacts });
-    }));
-    await chrome.storage.local.set({ leads });
-    await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
-  }
-
-  await setProgress({
-    isRunning: false,
-    currentItem: `Done. Got ${totalContacts} contact(s).`
-  });
-  setTimeout(async () => {
-    await chrome.storage.local.set({ progress: { isRunning: false } });
-  }, 4000);
-
-  return { ok: true, enriched: targets.length, totalContacts };
+  if (!targets.length) return { ok: true, totalContacts: 0 };
+  return await enrichLeadsSequential(targets, { title: "Finding emails & phones..." });
 }
 
-// Manual deep-scrape ALL
 async function deepScrapeAll() {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
   if (!leads.length) return { ok: false, error: "No leads saved" };
-
-  await setProgress({
-    isRunning: true,
-    title: "Deep-scraping all leads...",
-    currentPage: 0,
-    totalPages: leads.length,
-    totalFound: 0,
-    currentItem: ""
-  });
-
-  let processed = 0;
-  let totalContacts = 0;
-  const BATCH = 3;
-  for (let i = 0; i < leads.length; i += BATCH) {
-    const batch = leads.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (lead) => {
-      processed++;
-      await setProgress({
-        currentPage: processed,
-        currentItem: `Visiting: ${lead.domain || lead.url}`
-      });
-      const before = (lead.emails || []).length + (lead.phones || []).length;
-      await enrichLead(lead);
-      const after = (lead.emails || []).length + (lead.phones || []).length;
-      if (after > before) totalContacts += (after - before);
-      await setProgress({ totalFound: totalContacts });
-    }));
-    await chrome.storage.local.set({ leads });
-    await new Promise(r => setTimeout(r, 300 + Math.random() * 500));
-  }
-
-  await setProgress({
-    isRunning: false,
-    currentItem: `Done. Got ${totalContacts} contact(s).`
-  });
-  setTimeout(async () => {
-    await chrome.storage.local.set({ progress: { isRunning: false } });
-  }, 4000);
-
-  return { ok: true, updated: processed, totalContacts };
+  return await enrichLeadsSequential(leads, { title: "Deep-scraping all leads..." });
 }
 
 // ----- Message router -----
@@ -329,6 +378,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(await deepScrapeAll());
       } else if (msg.type === "AUTO_ENRICH") {
         sendResponse(await autoEnrichLeads(msg.urls || []));
+      } else if (msg.type === "STOP_ENRICH") {
+        await closeScrapingWindow();
+        await chrome.storage.local.set({ progress: { isRunning: false } });
+        sendResponse({ ok: true });
       } else {
         sendResponse({ ok: false, error: "unknown message" });
       }
