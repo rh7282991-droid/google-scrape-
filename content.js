@@ -1,5 +1,5 @@
 // content.js — runs on every Google search results page
-// Extracts result blocks based on user-selected fields and reports live progress.
+// Robust extraction that works across all Google layouts (any country, any year)
 
 (function () {
   "use strict";
@@ -19,10 +19,17 @@
   function unwrapGoogleUrl(href) {
     if (!href) return "";
     try {
-      if (href.startsWith("/url?")) {
+      // Handle relative /url?q=...
+      if (href.startsWith("/url?") || href.startsWith("/search?")) {
         const u = new URL(href, location.origin);
         const q = u.searchParams.get("q") || u.searchParams.get("url");
-        if (q) return q;
+        if (q && /^https?:\/\//i.test(q)) return q;
+      }
+      // Absolute google.com/url?q=
+      if (/^https?:\/\/(www\.)?google\.[a-z.]+\/url\?/i.test(href)) {
+        const u = new URL(href);
+        const q = u.searchParams.get("q") || u.searchParams.get("url");
+        if (q && /^https?:\/\//i.test(q)) return q;
       }
       return href;
     } catch (_) { return href; }
@@ -53,52 +60,100 @@
   function applyFields(rec, fields) {
     const out = { scrapedAt: new Date().toISOString() };
     if (fields.title) out.title = rec.title;
-    if (fields.url) out.url = rec.url;
+    if (fields.url || true) out.url = rec.url; // always keep for dedup
     if (fields.description) out.description = rec.description;
     if (fields.domain) out.domain = rec.domain;
     if (fields.emails) out.emails = rec.emails;
     if (fields.phones) out.phones = rec.phones;
     if (fields.position) out.position = rec.position;
     if (fields.query) out.query = rec.query;
-    out.url = rec.url; // always keep url internally for dedup
     return out;
+  }
+
+  // Find the nearest ancestor that "looks like" a result block
+  // (so we can grab the description text near it)
+  function findResultContainer(el) {
+    let node = el;
+    for (let i = 0; i < 8 && node; i++) {
+      if (node.matches && (
+        node.matches("div.g") ||
+        node.matches("div.tF2Cxc") ||
+        node.matches("div.MjjYud") ||
+        node.matches("div[data-snhf]") ||
+        node.matches("div[data-hveid]") ||
+        node.matches("div[jscontroller]")
+      )) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return el.parentElement || el;
+  }
+
+  function extractDescription(container, titleText) {
+    // Try a wide range of known description containers
+    const selectors = [
+      "div[data-sncf='1']",
+      "div[data-sncf]",
+      "div.VwiC3b",
+      "div.IsZvec",
+      "div.lEBKkf",
+      "div.lyLwlc",
+      "span.aCOpRe",
+      "div.s3v9rd",
+      "div.s",
+      "div[role='heading'] + div",
+      ".kvgmc6g5"
+    ];
+    for (const sel of selectors) {
+      const el = container.querySelector(sel);
+      if (el && el.textContent.trim().length > 20) {
+        return clean(el.textContent);
+      }
+    }
+    // Fallback: take the container's text minus the title
+    let text = clean((container.textContent || "").replace(titleText, ""));
+    if (text.length > 400) text = text.slice(0, 400) + "...";
+    return text;
   }
 
   function extractResults() {
     const out = [];
     const seen = new Set();
 
-    const blocks = document.querySelectorAll(
-      "div.g, div.tF2Cxc, div[data-hveid] div[data-snc], div[jscontroller][data-hveid]"
-    );
-
+    // Strategy: find every <h3> on the page, walk up to find its <a href> ancestor
+    // This is the most reliable approach since Google always wraps results around an h3.
+    const headings = document.querySelectorAll("h3");
     let position = (getCurrentPage() - 1) * 10;
-    blocks.forEach(block => {
-      const linkEl = block.querySelector("a[href]");
-      const titleEl = block.querySelector("h3");
-      if (!linkEl || !titleEl) return;
 
-      let url = unwrapGoogleUrl(linkEl.getAttribute("href"));
+    headings.forEach(h3 => {
+      const title = clean(h3.textContent);
+      if (!title) return;
+
+      // Walk up to find the link wrapping this h3
+      let linkEl = h3.closest("a[href]");
+      // If h3 is not inside an <a>, try sibling/cousin links in container
+      if (!linkEl) {
+        const container = findResultContainer(h3);
+        linkEl = container.querySelector("a[href]");
+      }
+      if (!linkEl) return;
+
+      let url = unwrapGoogleUrl(linkEl.getAttribute("href") || linkEl.href);
       if (!url || !/^https?:\/\//i.test(url)) return;
-      if (url.includes("google.com/search") || url.includes("webcache.googleusercontent.com")) return;
+
+      // Filter junk
+      if (url.includes("/search?") && /google\.[a-z.]+/.test(url)) return;
+      if (url.includes("webcache.googleusercontent.com")) return;
+      if (url.includes("/preferences?")) return;
+      if (url.includes("accounts.google.com")) return;
+      if (url.startsWith("https://www.google.com/url")) return;
       if (seen.has(url)) return;
       seen.add(url);
       position++;
 
-      const title = clean(titleEl.textContent);
-
-      let descEl =
-        block.querySelector("div[data-sncf='1']") ||
-        block.querySelector("div.VwiC3b") ||
-        block.querySelector("div.IsZvec") ||
-        block.querySelector("span.aCOpRe") ||
-        block.querySelector("div.s") ||
-        null;
-      let description = descEl ? clean(descEl.textContent) : "";
-      if (!description) {
-        description = clean(block.textContent.replace(title, ""));
-        if (description.length > 400) description = description.slice(0, 400) + "...";
-      }
+      const container = findResultContainer(h3);
+      const description = extractDescription(container, title);
 
       const combined = `${title} ${description}`;
       const { emails, phones } = extractFromText(combined);
@@ -115,7 +170,7 @@
     return out;
   }
 
-  function showToast(message) {
+  function showToast(message, type = "info") {
     let toast = document.getElementById("__gls_toast__");
     if (!toast) {
       toast = document.createElement("div");
@@ -126,14 +181,16 @@
         padding: "10px 14px", borderRadius: "8px",
         font: "13px/1.4 system-ui, sans-serif",
         zIndex: 999999, boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-        opacity: "0", transition: "opacity .25s ease"
+        opacity: "0", transition: "opacity .25s ease",
+        maxWidth: "300px"
       });
       document.body.appendChild(toast);
     }
+    toast.style.background = type === "error" ? "#d93025" : "#1a73e8";
     toast.textContent = message;
     requestAnimationFrame(() => (toast.style.opacity = "1"));
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => (toast.style.opacity = "0"), 2200);
+    toast._t = setTimeout(() => (toast.style.opacity = "0"), 3000);
   }
 
   async function setProgress(patch) {
@@ -194,7 +251,11 @@
     });
 
     if (!silent) {
-      showToast(`Scraped ${results.length} on page ${currentPage} • ${added} new saved`);
+      if (results.length === 0) {
+        showToast("No results detected. Scroll the page or try a different query.", "error");
+      } else {
+        showToast(`Scraped ${results.length} on page ${currentPage} • ${added} new saved`);
+      }
     }
     return { found: results.length, added };
   }
@@ -218,14 +279,14 @@
     const nextLink =
       document.querySelector("a#pnnext") ||
       document.querySelector('a[aria-label="Next page"]') ||
-      document.querySelector('a[aria-label="Next"]');
+      document.querySelector('a[aria-label="Next"]') ||
+      document.querySelector('a[aria-label*="ext" i]');
 
     if (nextLink) {
       const delay = 2000 + Math.floor(Math.random() * 3000);
       const seconds = (delay / 1000).toFixed(1);
       showToast(`Going to page ${currentPage + 1} in ${seconds}s...`);
 
-      // Live countdown in popup
       let remaining = delay;
       const tick = setInterval(async () => {
         remaining -= 250;
@@ -247,11 +308,14 @@
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.type === "SCRAPE_NOW") {
       runScrape().then(async (r) => {
-        // single-page scrape: stop progress after a short moment
         setTimeout(() => clearProgress(), 1500);
         sendResponse(r);
       });
       return true;
+    }
+    if (msg && msg.type === "PING") {
+      sendResponse({ ok: true });
+      return false;
     }
   });
 
