@@ -50,6 +50,26 @@ async function getActiveTab() {
   return tab;
 }
 
+// Check if the URL is any Google search page (any TLD)
+function isGoogleSearchUrl(url) {
+  if (!url) return false;
+  return /^https?:\/\/(www\.)?google\.[a-z.]+\/search/i.test(url);
+}
+
+// Try to inject content script if it's not already there
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+    return true;
+  } catch (e) {
+    console.warn("Inject failed:", e);
+    return false;
+  }
+}
+
 // ----- Progress UI -----
 function renderProgress(p) {
   const box = $("progressBox");
@@ -86,20 +106,38 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // ----- Buttons -----
 $("scrapeNow").addEventListener("click", async () => {
   const tab = await getActiveTab();
-  if (!tab || !/^https?:\/\/(www\.)?google\.com\/search/.test(tab.url || "")) {
-    setStatus("Please open google.com/search first.");
+  if (!tab || !isGoogleSearchUrl(tab.url)) {
+    setStatus("Please open a Google search page first (any country).");
     return;
   }
   setStatus("Scraping current page...");
+
+  // First try: send message to existing content script
+  let res;
   try {
-    const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
-    if (res) {
-      setStatus(`Found ${res.found} result(s), ${res.added} new saved.`);
-    } else {
-      setStatus("No response from page. Try reloading the search page.");
-    }
+    res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
   } catch (e) {
-    setStatus("Could not reach page. Reload the Google search tab.");
+    // Content script not present — inject it and retry
+    setStatus("Injecting scraper into page...");
+    const injected = await ensureContentScript(tab.id);
+    if (!injected) {
+      setStatus("Cannot inject scraper. Try reloading the Google tab.");
+      return;
+    }
+    // Wait a moment for it to initialize
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
+    } catch (e2) {
+      setStatus("Still cannot reach page. Please reload the Google search tab.");
+      return;
+    }
+  }
+
+  if (res) {
+    setStatus(`Found ${res.found} result(s), ${res.added} new saved.`);
+  } else {
+    setStatus("No results found. Try scrolling the page first.");
   }
   refreshCount();
 });

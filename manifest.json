@@ -12,6 +12,15 @@
   "host_permissions": [
     "https://www.google.com/*",
     "https://google.com/*",
+    "https://www.google.com.bd/*",
+    "https://www.google.co.in/*",
+    "https://www.google.co.uk/*",
+    "https://www.google.ca/*",
+    "https://www.google.com.au/*",
+    "https://www.google.de/*",
+    "https://www.google.fr/*",
+    "https://*.google.com/*",
+    "https://*.google.com.bd/*",
     "<all_urls>"
   ],
   "background": {
@@ -35,10 +44,21 @@
     {
       "matches": [
         "https://www.google.com/search*",
-        "https://google.com/search*"
+        "https://google.com/search*",
+        "https://www.google.com.bd/search*",
+        "https://www.google.co.in/search*",
+        "https://www.google.co.uk/search*",
+        "https://www.google.ca/search*",
+        "https://www.google.com.au/search*",
+        "https://www.google.de/search*",
+        "https://www.google.fr/search*",
+        "https://*.google.com/search*",
+        "https://*.google.com.bd/search*",
+        "https://*.google.co.in/search*"
       ],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ]
 }
