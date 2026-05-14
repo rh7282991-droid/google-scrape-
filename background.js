@@ -1,5 +1,5 @@
 // background.js — service worker
-// Handles: CSV/JSON export, deep-scrape (visit each result url and extract emails/phones)
+// Handles: CSV/JSON export, deep-scrape with live progress
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
@@ -13,44 +13,39 @@ function csvEscape(v) {
 }
 
 function leadsToCsv(leads) {
-  const headers = ["title", "url", "description", "emails", "phones", "query", "page", "scrapedAt"];
-  const rows = [headers.join(",")];
+  // Build headers from union of keys present
+  const keys = new Set();
+  leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
+  // Preferred order
+  const preferred = ["title", "url", "domain", "description", "emails", "phones",
+                     "position", "query", "scrapedAt", "deepScrapedAt"];
+  const headers = preferred.filter(k => keys.has(k))
+    .concat([...keys].filter(k => !preferred.includes(k)));
+
+  const rows = [headers.map(csvEscape).join(",")];
   for (const l of leads) {
-    rows.push([
-      csvEscape(l.title),
-      csvEscape(l.url),
-      csvEscape(l.description),
-      csvEscape((l.emails || []).join("; ")),
-      csvEscape((l.phones || []).join("; ")),
-      csvEscape(l.query),
-      csvEscape(l.page),
-      csvEscape(l.scrapedAt)
-    ].join(","));
+    rows.push(headers.map(h => {
+      const v = l[h];
+      if (Array.isArray(v)) return csvEscape(v.join("; "));
+      return csvEscape(v);
+    }).join(","));
   }
   return rows.join("\n");
 }
 
 function downloadText(text, filename, mime) {
-  // Service workers cannot use URL.createObjectURL on Blob in MV3 reliably,
-  // so we use a data URL instead.
   const dataUrl = `data:${mime};charset=utf-8,` + encodeURIComponent(text);
-  return chrome.downloads.download({
-    url: dataUrl,
-    filename,
-    saveAs: true
-  });
+  return chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
 }
 
 // ----- Deep scrape -----
 
 function extractContactsFromHtml(html) {
-  // Strip tags very loosely so we still pick up obfuscated mailto: too
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ");
 
-  // Also pull mailto: and tel: links explicitly
   const mailtos = Array.from(html.matchAll(/mailto:([^"'>\s?]+)/gi)).map(m => m[1]);
   const tels = Array.from(html.matchAll(/tel:([^"'>\s?]+)/gi)).map(m => m[1]);
 
@@ -62,12 +57,10 @@ function extractContactsFromHtml(html) {
 
   const phonesRaw = [...tels, ...(text.match(PHONE_RE) || [])];
   const phones = Array.from(new Set(
-    phonesRaw
-      .map(p => p.trim())
-      .filter(p => {
-        const digits = p.replace(/\D/g, "");
-        return digits.length >= 8 && digits.length <= 15;
-      })
+    phonesRaw.map(p => p.trim()).filter(p => {
+      const digits = p.replace(/\D/g, "");
+      return digits.length >= 8 && digits.length <= 15;
+    })
   ));
 
   return { emails, phones };
@@ -78,51 +71,77 @@ async function fetchPage(url) {
   const t = setTimeout(() => ctrl.abort(), 12000);
   try {
     const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: "follow",
-      headers: {
-        // Pretend to be a normal browser; the host_permissions cover <all_urls>.
-        "Accept": "text/html,application/xhtml+xml"
-      }
+      signal: ctrl.signal, redirect: "follow",
+      headers: { "Accept": "text/html,application/xhtml+xml" }
     });
     if (!res.ok) return null;
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("text/html") && !ct.includes("application/xhtml")) return null;
     return await res.text();
-  } catch (_) {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
+  } catch (_) { return null; }
+  finally { clearTimeout(t); }
+}
+
+async function setProgress(patch) {
+  const { progress = {} } = await chrome.storage.local.get(["progress"]);
+  await chrome.storage.local.set({
+    progress: { ...progress, ...patch, updatedAt: Date.now() }
+  });
 }
 
 async function deepScrapeAll() {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
   if (!leads.length) return { ok: false, error: "No leads saved" };
 
+  await setProgress({
+    isRunning: true,
+    title: "Deep-scraping URLs...",
+    currentPage: 0,
+    totalPages: leads.length,
+    totalFound: 0,
+    currentItem: ""
+  });
+
   let updated = 0;
-  // Concurrency: process 3 at a time, with a small jitter between batches
+  let processed = 0;
+  let totalContacts = 0;
+
   const BATCH = 3;
   for (let i = 0; i < leads.length; i += BATCH) {
     const batch = leads.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (lead) => {
-      // Skip if we already have at least one email AND one phone — saves time
+    await Promise.all(batch.map(async (lead, idx) => {
+      processed++;
+      await setProgress({
+        currentPage: processed,
+        currentItem: `Visiting: ${lead.domain || lead.url}`
+      });
+
       if ((lead.emails || []).length && (lead.phones || []).length) return;
       const html = await fetchPage(lead.url);
       if (!html) return;
       const { emails, phones } = extractContactsFromHtml(html);
-      const merged = {
-        ...lead,
-        emails: Array.from(new Set([...(lead.emails || []), ...emails])),
-        phones: Array.from(new Set([...(lead.phones || []), ...phones])),
-        deepScrapedAt: new Date().toISOString()
-      };
-      Object.assign(lead, merged);
-      updated++;
+      lead.emails = Array.from(new Set([...(lead.emails || []), ...emails]));
+      lead.phones = Array.from(new Set([...(lead.phones || []), ...phones]));
+      lead.deepScrapedAt = new Date().toISOString();
+      if (emails.length || phones.length) {
+        updated++;
+        totalContacts += emails.length + phones.length;
+      }
+      await setProgress({ totalFound: totalContacts });
     }));
     await chrome.storage.local.set({ leads });
     await new Promise(r => setTimeout(r, 400 + Math.random() * 600));
   }
+
+  await setProgress({
+    isRunning: false,
+    currentItem: `Done. ${updated} leads enriched.`
+  });
+  // auto-hide after a few seconds
+  setTimeout(async () => {
+    await chrome.storage.local.set({ progress: { isRunning: false } });
+  }, 4000);
+
   return { ok: true, updated };
 }
 
@@ -154,12 +173,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: false, error: String(e && e.message || e) });
     }
   })();
-  return true; // async
+  return true;
 });
 
-// First-install defaults
 chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "autoMaxPages"]);
+  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
   if (!cur.autoMaxPages) await chrome.storage.local.set({ autoMaxPages: 5 });
+  if (!cur.fields) {
+    await chrome.storage.local.set({
+      fields: {
+        title: true, url: true, description: true, domain: true,
+        emails: true, phones: true, position: false, query: false
+      }
+    });
+  }
 });
