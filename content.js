@@ -229,7 +229,8 @@
     const fields = await getFields();
     const results = extractResults();
 
-    const { autoMaxPages = 5, autoNext } = await chrome.storage.local.get(["autoMaxPages", "autoNext"]);
+    const { autoMaxPages = 5, autoNext, autoEnrich = true } =
+      await chrome.storage.local.get(["autoMaxPages", "autoNext", "autoEnrich"]);
     const totalPages = autoNext ? Number(autoMaxPages) : 1;
     const currentPage = getCurrentPage();
 
@@ -254,9 +255,17 @@
       if (results.length === 0) {
         showToast("No results detected. Scroll the page or try a different query.", "error");
       } else {
-        showToast(`Scraped ${results.length} on page ${currentPage} • ${added} new saved`);
+        showToast(`Scraped ${results.length} on page ${currentPage}. Now finding emails/phones...`);
       }
     }
+
+    // Auto-enrich newly added leads (visit each URL, look for contact info)
+    if (autoEnrich && results.length > 0) {
+      const urls = results.map(r => r.url);
+      // Fire-and-forget — background will update progress live
+      chrome.runtime.sendMessage({ type: "AUTO_ENRICH", urls }).catch(() => {});
+    }
+
     return { found: results.length, added };
   }
 

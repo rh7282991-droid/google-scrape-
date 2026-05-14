@@ -20,11 +20,12 @@ async function refreshCount() {
 
 async function loadSettings() {
   const s = await chrome.storage.local.get([
-    "autoScrape", "autoNext", "autoMaxPages", "fields"
+    "autoScrape", "autoNext", "autoMaxPages", "fields", "autoEnrich"
   ]);
   $("autoScrape").checked = !!s.autoScrape;
   $("autoNext").checked = !!s.autoNext;
   $("autoMaxPages").value = s.autoMaxPages || 5;
+  $("autoEnrich").checked = s.autoEnrich !== false; // default true
 
   const fields = s.fields || DEFAULT_FIELDS;
   for (const f of ALL_FIELDS) {
@@ -144,6 +145,7 @@ $("scrapeNow").addEventListener("click", async () => {
 
 $("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
 $("autoNext").addEventListener("change", (e) => saveSetting("autoNext", e.target.checked));
+$("autoEnrich").addEventListener("change", (e) => saveSetting("autoEnrich", e.target.checked));
 $("autoMaxPages").addEventListener("change", (e) =>
   saveSetting("autoMaxPages", Number(e.target.value) || 5)
 );
