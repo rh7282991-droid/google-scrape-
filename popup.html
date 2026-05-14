@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Google Lead Scraper</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Google Lead Scraper</h1>
+    <span id="count" class="badge">0 leads</span>
+  </header>
+
+  <section class="status" id="status">Ready.</section>
+
+  <section class="controls">
+    <button id="scrapeNow" class="primary">Scrape this page</button>
+
+    <div class="row">
+      <label class="switch">
+        <input type="checkbox" id="autoScrape" />
+        <span>Auto-scrape on every Google page</span>
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="switch">
+        <input type="checkbox" id="autoNext" />
+        <span>Auto-click "Next page"</span>
+      </label>
+    </div>
+
+    <div class="row inline">
+      <label for="autoMaxPages">Max pages:</label>
+      <input type="number" id="autoMaxPages" min="1" max="50" value="5" />
+    </div>
+
+    <hr />
+
+    <div class="row">
+      <label class="switch">
+        <input type="checkbox" id="deepScrape" />
+        <span>Deep-scrape (visit each link for emails/phones)</span>
+      </label>
+    </div>
+    <button id="runDeep" class="secondary">Run deep-scrape on saved leads</button>
+
+    <hr />
+
+    <div class="actions">
+      <button id="exportCsv" class="secondary">Export CSV</button>
+      <button id="exportJson" class="secondary">Export JSON</button>
+      <button id="clear" class="danger">Clear all</button>
+    </div>
+  </section>
+
+  <footer>
+    <small>Tip: open <a href="https://www.google.com/search?q=site%3Alinkedin.com+%22founder%22+dhaka" target="_blank">google.com/search</a>, then click "Scrape this page".</small>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
