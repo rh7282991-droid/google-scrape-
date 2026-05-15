@@ -29,6 +29,251 @@
     catch (_) { return ""; }
   }
 
+  // ===== FEATURE 1: Smart Random Delay (Gaussian Human-like Timing) =====
+  // Instead of fixed delays, uses Gaussian distribution to simulate natural human pauses.
+  // People don't click at fixed intervals — they pause, read, get distracted.
+  const HumanDelay = {
+    baseMin: 2000,
+    baseMax: 8000,
+    burstCount: 0,
+    lastActionTime: 0,
+
+    // Box-Muller transform for Gaussian random (mean=0, stddev=1)
+    _gaussian() {
+      let u = 0, v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    },
+
+    // Returns a delay between 2-15 seconds following Gaussian distribution
+    // centered around 5-7s with occasional spikes to 12-15s (simulating "reading")
+    getDelay() {
+      const now = Date.now();
+      const elapsed = now - this.lastActionTime;
+
+      // Track burst behavior — if user is clicking fast, slow down
+      if (elapsed < 3000 && this.lastActionTime > 0) {
+        this.burstCount++;
+      } else if (elapsed > 10000) {
+        this.burstCount = Math.max(0, this.burstCount - 2);
+      }
+
+      // Gaussian centered at 5.5s with stddev ~2s
+      const mean = 5500 + (this.burstCount * 800); // shift mean higher if bursting
+      const stddev = 2000;
+      let delay = mean + this._gaussian() * stddev;
+
+      // 12% chance of a "reading pause" (person stops to read something)
+      if (Math.random() < 0.12) {
+        delay += 4000 + Math.random() * 8000; // adds 4-12s extra
+      }
+
+      // 5% chance of a very quick action (person already knows where to click)
+      if (Math.random() < 0.05) {
+        delay = 1500 + Math.random() * 1000;
+      }
+
+      // Clamp to 2-15 seconds
+      delay = Math.max(2000, Math.min(15000, delay));
+
+      this.lastActionTime = now;
+      return Math.round(delay);
+    },
+
+    // Shorter delay for sub-actions (e.g., between scroll steps)
+    getMicroDelay() {
+      const base = 300 + this._gaussian() * 200;
+      return Math.max(100, Math.min(1200, Math.round(base + 400)));
+    }
+  };
+
+  // ===== FEATURE 2: Mouse Movement Simulation =====
+  // Fires realistic mousemove events along a curved path before clicking.
+  // Google's bot detection tracks mouse trails — no trail = bot.
+  const MouseSimulator = {
+    // Generate a bezier curve path from current mouse pos to target
+    _bezierPath(startX, startY, endX, endY, steps) {
+      const points = [];
+      // Random control points for natural curve
+      const cp1x = startX + (endX - startX) * 0.3 + (Math.random() - 0.5) * 100;
+      const cp1y = startY + (endY - startY) * 0.1 + (Math.random() - 0.5) * 80;
+      const cp2x = startX + (endX - startX) * 0.7 + (Math.random() - 0.5) * 60;
+      const cp2y = startY + (endY - startY) * 0.9 + (Math.random() - 0.5) * 40;
+
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const mt = 1 - t;
+        const mt2 = mt * mt;
+        const mt3 = mt2 * mt;
+
+        // Cubic bezier
+        const x = mt3 * startX + 3 * mt2 * t * cp1x + 3 * mt * t2 * cp2x + t3 * endX;
+        const y = mt3 * startY + 3 * mt2 * t * cp1y + 3 * mt * t2 * cp2y + t3 * endY;
+
+        // Add tiny jitter (hand shake)
+        points.push({
+          x: x + (Math.random() - 0.5) * 2,
+          y: y + (Math.random() - 0.5) * 2
+        });
+      }
+      return points;
+    },
+
+    // Simulate mouse movement to an element, then click
+    async moveAndClick(element) {
+      if (!element) return;
+
+      const rect = element.getBoundingClientRect();
+      // Random point within the element (not dead center — humans are imprecise)
+      const targetX = rect.left + rect.width * (0.3 + Math.random() * 0.4);
+      const targetY = rect.top + rect.height * (0.3 + Math.random() * 0.4);
+
+      // Start from a random-ish position (last known or random)
+      const startX = this._lastX || (window.innerWidth * Math.random());
+      const startY = this._lastY || (window.innerHeight * Math.random());
+
+      // Generate path with 15-30 steps
+      const steps = 15 + Math.floor(Math.random() * 15);
+      const path = this._bezierPath(startX, startY, targetX, targetY, steps);
+
+      // Fire mousemove events along the path
+      for (let i = 0; i < path.length; i++) {
+        const { x, y } = path[i];
+        const moveEvent = new MouseEvent("mousemove", {
+          clientX: x, clientY: y,
+          bubbles: true, cancelable: true,
+          view: window
+        });
+        document.elementFromPoint(x, y)?.dispatchEvent(moveEvent);
+
+        // Variable speed: slow start, fast middle, slow end (ease-in-out)
+        const progress = i / path.length;
+        const speedFactor = 1 - Math.abs(progress - 0.5) * 1.5; // slower at edges
+        const delay = 8 + speedFactor * 20 + Math.random() * 10;
+        await sleep(delay);
+      }
+
+      // Save last position
+      this._lastX = targetX;
+      this._lastY = targetY;
+
+      // Hover pause (human hesitates 100-400ms before clicking)
+      await sleep(100 + Math.random() * 300);
+
+      // Fire mouseenter and mouseover on target
+      element.dispatchEvent(new MouseEvent("mouseenter", { clientX: targetX, clientY: targetY, bubbles: true }));
+      element.dispatchEvent(new MouseEvent("mouseover", { clientX: targetX, clientY: targetY, bubbles: true }));
+
+      await sleep(50 + Math.random() * 100);
+
+      // Fire mousedown → mouseup → click sequence
+      element.dispatchEvent(new MouseEvent("mousedown", { clientX: targetX, clientY: targetY, bubbles: true }));
+      await sleep(50 + Math.random() * 80); // hold duration
+      element.dispatchEvent(new MouseEvent("mouseup", { clientX: targetX, clientY: targetY, bubbles: true }));
+      element.dispatchEvent(new MouseEvent("click", { clientX: targetX, clientY: targetY, bubbles: true }));
+    },
+
+    _lastX: null,
+    _lastY: null
+  };
+
+  // ===== FEATURE 3: Random Scroll Patterns =====
+  // Instead of always scrolling down, mixes up/down/slow/fast to look human.
+  // Humans don't scroll linearly — they overshoot, go back, pause to read.
+  const HumanScroll = {
+    // Scroll a container with human-like patterns
+    async scroll(container, options = {}) {
+      const { maxScrolls = 10 } = options;
+      let prevCount = 0;
+
+      for (let i = 0; i < maxScrolls; i++) {
+        const items = container.querySelectorAll('a.hfpxzc, div.Nv2PK');
+        if (items.length === prevCount && i > 2) break;
+        prevCount = items.length;
+
+        // Decide scroll behavior for this iteration
+        const action = this._pickAction(i, maxScrolls);
+
+        switch (action.type) {
+          case "down_fast":
+            // Quick scroll to bottom
+            container.scrollTop = container.scrollHeight;
+            break;
+
+          case "down_slow":
+            // Gradual scroll down (multiple small steps)
+            await this._smoothScroll(container, "down", action.distance);
+            break;
+
+          case "up_partial":
+            // Scroll back up a bit (like re-reading something)
+            await this._smoothScroll(container, "up", action.distance);
+            // Then scroll back down past where we were
+            await sleep(HumanDelay.getMicroDelay());
+            await this._smoothScroll(container, "down", action.distance * 1.5);
+            break;
+
+          case "pause_read":
+            // Don't scroll — just pause as if reading
+            await sleep(2000 + Math.random() * 3000);
+            break;
+        }
+
+        // Wait between scroll actions
+        const waitTime = HumanDelay.getMicroDelay() + 800 + Math.random() * 700;
+        await sleep(waitTime);
+
+        await setProgress({
+          currentItem: `Scrolling... loaded ${items.length} results (${action.type})`
+        });
+      }
+    },
+
+    // Pick what scroll action to do — weighted random
+    _pickAction(iteration, total) {
+      const rand = Math.random();
+      const progress = iteration / total;
+
+      // Early scrolls: mostly down
+      if (progress < 0.3) {
+        if (rand < 0.6) return { type: "down_fast" };
+        if (rand < 0.85) return { type: "down_slow", distance: 300 + Math.random() * 500 };
+        return { type: "pause_read" };
+      }
+
+      // Middle scrolls: mix everything (2 out of 10 go backward)
+      if (rand < 0.4) return { type: "down_fast" };
+      if (rand < 0.65) return { type: "down_slow", distance: 200 + Math.random() * 400 };
+      if (rand < 0.85) return { type: "up_partial", distance: 150 + Math.random() * 300 };
+      return { type: "pause_read" };
+    },
+
+    // Smooth scroll in small increments
+    async _smoothScroll(container, direction, totalDistance) {
+      const steps = 5 + Math.floor(Math.random() * 8);
+      const stepSize = totalDistance / steps;
+
+      for (let s = 0; s < steps; s++) {
+        // Non-uniform step sizes (accelerate then decelerate)
+        const progress = s / steps;
+        const factor = Math.sin(progress * Math.PI); // bell curve speed
+        const thisStep = stepSize * (0.5 + factor);
+
+        if (direction === "down") {
+          container.scrollTop += thisStep;
+        } else {
+          container.scrollTop -= thisStep;
+        }
+
+        // Variable timing between scroll micro-steps
+        await sleep(30 + Math.random() * 60 + (1 - factor) * 40);
+      }
+    }
+  };
+
   // ===== FEATURE 10: Social Media Detection =====
   function extractSocialLinks(text) {
     const socials = {};
@@ -427,23 +672,13 @@
   }
 
   // ===== Scroll to load all results in Maps feed =====
+  // Uses FEATURE 3 (Random Scroll Patterns) + FEATURE 1 (Smart Delay)
   async function scrollToLoadAll(maxScrolls = 10) {
     const feed = document.querySelector('div[role="feed"]');
     if (!feed) return;
 
-    let prevCount = 0;
-    for (let i = 0; i < maxScrolls; i++) {
-      const items = feed.querySelectorAll('a.hfpxzc, div.Nv2PK');
-      if (items.length === prevCount && i > 2) break;
-      prevCount = items.length;
-
-      feed.scrollTop = feed.scrollHeight;
-      await sleep(1500 + Math.random() * 1000);
-
-      await setProgress({
-        currentItem: `Scrolling... loaded ${items.length} results`
-      });
-    }
+    // Use human-like scroll patterns instead of simple scrollTop = scrollHeight
+    await HumanScroll.scroll(feed, { maxScrolls });
   }
 
   // ===== Message handlers =====
@@ -460,8 +695,14 @@
           currentItem: "Scrolling to load results..."
         });
 
-        // Scroll to load more results
+        // FEATURE 1: Smart delay before starting (human doesn't act instantly)
+        await sleep(HumanDelay.getMicroDelay() + 500);
+
+        // FEATURE 3: Scroll with human-like patterns
         await scrollToLoadAll(msg.maxScrolls || 8);
+
+        // FEATURE 1: Pause after scrolling (reading results)
+        await sleep(HumanDelay.getDelay() * 0.4);
 
         const results = extractMapsSearchResults();
         const added = await saveMapsResults(results);
@@ -518,6 +759,10 @@
           currentItem: "Loading list..."
         });
 
+        // FEATURE 1: Initial human pause
+        await sleep(HumanDelay.getMicroDelay() + 300);
+
+        // FEATURE 3: Human-like scroll to load
         await scrollToLoadAll(msg.maxScrolls || 6);
         const listResults = extractMapsSearchResults();
 
@@ -563,6 +808,26 @@
       const allLinks = Array.from(document.querySelectorAll("a[href]")).map(a => a.href).join(" ");
       const socials = extractSocialLinks(allLinks + " " + pageText);
       sendResponse({ ok: true, socials });
+      return true;
+    }
+
+    // FEATURE 2: Click a Maps result card with mouse simulation
+    if (msg.type === "CLICK_RESULT_CARD") {
+      (async () => {
+        const feed = document.querySelector('div[role="feed"]');
+        if (!feed) return sendResponse({ ok: false, error: "No feed found" });
+
+        const cards = feed.querySelectorAll('a.hfpxzc, div.Nv2PK a');
+        const index = msg.index || 0;
+        if (index >= cards.length) return sendResponse({ ok: false, error: "Card index out of range" });
+
+        const card = cards[index];
+        // FEATURE 1: Human delay before clicking
+        await sleep(HumanDelay.getDelay() * 0.3);
+        // FEATURE 2: Simulate realistic mouse movement + click
+        await MouseSimulator.moveAndClick(card);
+        sendResponse({ ok: true, clicked: index });
+      })();
       return true;
     }
   });
