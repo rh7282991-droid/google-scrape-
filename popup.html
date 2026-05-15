@@ -2,27 +2,45 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Google Lead Scraper</title>
+  <title>Google Lead Scraper Pro</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <!-- Header with logo & status -->
-  <header class="app-header">
-    <div class="header-left">
-      <img src="icons/icon48.png" alt="logo" class="logo" />
-      <div class="header-info">
-        <h1>Google Lead Scraper</h1>
-        <small>Smart lead collector from Google Search</small>
+
+  <!-- ===== Header Card ===== -->
+  <div class="header-card">
+    <div class="header-top">
+      <img src="assets/logo.svg" alt="logo" class="logo" />
+      <div class="header-text">
+        <h1>Lead Scraper <span class="pro-badge">PRO</span></h1>
+        <p class="subtitle">Smart deep lead collector <span class="dot-sep">&middot;</span> <span id="totalLeadsHeader">0</span> Leads Collected</p>
+      </div>
+      <span id="statusBadge" class="status-pill ready">Ready</span>
+    </div>
+
+    <!-- Quota / Stats bar -->
+    <div class="stats-row">
+      <div class="stat">
+        <div class="stat-label">Today</div>
+        <div class="stat-value" id="todayCount">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Total</div>
+        <div class="stat-value" id="totalCount">0</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Quota Left</div>
+        <div class="stat-value" id="quotaLeft">300</div>
       </div>
     </div>
-    <span id="statusBadge" class="status-badge ready">Ready</span>
-  </header>
+  </div>
 
-  <!-- Live progress bar (hidden by default) -->
+  <!-- ===== Live Progress (hidden by default) ===== -->
   <section class="progress-box" id="progressBox" style="display:none;">
     <div class="progress-header">
       <span class="dot"></span>
       <span id="progressTitle">Working...</span>
+      <button id="stopBtn" class="btn-mini btn-danger">Stop</button>
     </div>
     <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
     <div class="progress-meta">
@@ -32,7 +50,7 @@
     <div class="progress-current" id="progCurrent"></div>
   </section>
 
-  <!-- Resume Banner (Feature 17) -->
+  <!-- ===== Resume Banner (Feature 17) ===== -->
   <section class="resume-banner" id="resumeBanner" style="display:none;">
     <div class="resume-content">
       <span class="resume-icon">&#9889;</span>
@@ -42,55 +60,80 @@
       </div>
     </div>
     <div class="resume-actions">
-      <button id="resumeYes" class="btn-sm btn-primary">Resume</button>
-      <button id="resumeNo" class="btn-sm btn-danger">Dismiss</button>
+      <button id="resumeYes" class="btn-mini btn-primary">Resume</button>
+      <button id="resumeNo" class="btn-mini btn-ghost">Dismiss</button>
     </div>
   </section>
 
-  <!-- Main Campaign Setup -->
-  <section class="campaign-setup">
-    <h2 class="section-title">Campaign Setup</h2>
+  <!-- ===== CAPTCHA Banner (Feature 4) ===== -->
+  <section class="captcha-banner" id="captchaBanner" style="display:none;">
+    <span class="captcha-icon">&#9888;</span>
+    <div class="captcha-text">
+      <strong>Suspicious activity detected</strong>
+      <small>Cooldown: <span id="captchaTimer">30:00</span> remaining</small>
+    </div>
+    <button id="dismissCaptcha" class="btn-mini btn-ghost">OK</button>
+  </section>
+
+  <!-- ===== Main Card: Campaign Setup ===== -->
+  <div class="main-card">
+    <div class="card-title">
+      <span>Campaign Setup</span>
+      <button id="clearCampaign" class="btn-mini btn-ghost" title="Clear all inputs">Reset</button>
+    </div>
 
     <!-- Business Keywords -->
     <div class="form-group">
-      <label class="form-label">Business Keywords</label>
+      <label class="form-label">
+        Business Keywords
+        <span class="hint" id="keywordCount">0 keywords</span>
+      </label>
       <textarea id="searchInput" rows="3" placeholder="cafe&#10;plumber&#10;dentist near me"></textarea>
-      <button id="pasteKeywords" class="btn-block btn-accent">Paste Keywords</button>
+      <div class="btn-row">
+        <button id="pasteKeywords" class="btn-block btn-blue">
+          <span class="ic">&#128203;</span> Paste Keywords
+        </button>
+      </div>
     </div>
 
     <!-- Locations -->
     <div class="form-group">
-      <label class="form-label">Locations</label>
+      <label class="form-label">
+        Locations
+        <span class="hint" id="locationCount">0 locations</span>
+      </label>
       <textarea id="locationInput" rows="3" placeholder="dhaka&#10;gulshan&#10;mirpur"></textarea>
-      <button id="pasteLocations" class="btn-block btn-accent">Paste Locations</button>
+      <div class="btn-row">
+        <button id="pasteLocations" class="btn-block btn-blue">
+          <span class="ic">&#128205;</span> Paste Locations
+        </button>
+      </div>
       <div class="location-chips" id="locationChips"></div>
     </div>
 
-    <!-- Search Suggestions (Feature 15) -->
-    <div class="suggest-wrap" id="suggestWrap" style="display:none;">
+    <!-- Suggestion dropdowns -->
+    <div class="suggest-overlay" id="suggestWrap" style="display:none;">
       <ul class="suggest-list" id="suggestList"></ul>
-    </div>
-    <div class="suggest-wrap" id="locationSuggestWrap" style="display:none;">
-      <ul class="suggest-list" id="locationSuggestList"></ul>
     </div>
 
     <!-- Settings Grid -->
     <div class="settings-grid">
       <div class="setting-item">
         <label>Target Leads</label>
-        <input type="number" id="targetLeads" min="1" max="1000" value="100" />
+        <input type="number" id="targetLeads" min="1" max="10000" value="100" />
       </div>
       <div class="setting-item">
-        <label>Max per Search</label>
-        <input type="number" id="autoMaxPages" min="1" max="50" value="50" />
+        <label>Max Pages</label>
+        <input type="number" id="autoMaxPages" min="1" max="100" value="50" />
       </div>
       <div class="setting-item">
         <label>Profile Wait</label>
         <select id="profileWait">
-          <option value="3">3 sec Fast</option>
+          <option value="2">2 sec Fast</option>
           <option value="5">5 sec Normal</option>
           <option value="7" selected>7 sec Safer</option>
           <option value="10">10 sec Slow</option>
+          <option value="15">15 sec Stealth</option>
         </select>
       </div>
       <div class="setting-item">
@@ -98,51 +141,81 @@
         <input type="number" id="searchScroll" min="5" max="100" value="25" />
       </div>
     </div>
-  </section>
 
-  <!-- Action Buttons -->
-  <section class="action-section">
-    <button id="scrapeNow" class="btn-block btn-primary btn-large">
-      <span class="btn-icon">&#9654;</span> Start Scraping
+    <!-- Toggle row -->
+    <div class="toggle-section">
+      <label class="toggle-row">
+        <span class="toggle-switch">
+          <input type="checkbox" id="autoScrape" />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text">
+          <strong>Auto-scrape</strong>
+          <small>Automatically scrape every Google search</small>
+        </span>
+      </label>
+
+      <label class="toggle-row">
+        <span class="toggle-switch">
+          <input type="checkbox" id="autoNext" />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text">
+          <strong>Auto-click Next</strong>
+          <small>Click "Next page" automatically</small>
+        </span>
+      </label>
+
+      <label class="toggle-row">
+        <span class="toggle-switch">
+          <input type="checkbox" id="deepEnrich" />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text">
+          <strong>Deep enrichment</strong>
+          <small>Visit each URL for emails/phones</small>
+        </span>
+      </label>
+    </div>
+
+    <!-- Big start button -->
+    <button id="scrapeNow" class="btn-block btn-primary btn-xl">
+      <span class="ic">&#9654;</span> Start Scraping
     </button>
+  </div>
 
-    <div class="toggle-row">
-      <label class="toggle-switch">
-        <input type="checkbox" id="autoScrape" />
-        <span class="toggle-slider"></span>
-      </label>
-      <span>Auto-scrape on every page</span>
+  <!-- ===== Live Preview (Feature 14) ===== -->
+  <div class="card collapsible" id="previewPanel">
+    <div class="card-header" id="previewHeader">
+      <div class="card-header-left">
+        <span class="header-icon">&#128190;</span>
+        <span>Live Preview</span>
+        <span class="badge-count" id="previewCount">0</span>
+      </div>
+      <span class="chevron" id="previewChevron">&#9650;</span>
     </div>
+    <div class="card-body" id="previewBody2">
+      <div class="preview-table-wrap" id="previewTableWrap">
+        <table class="preview-table">
+          <thead><tr><th>#</th><th>Title</th><th>Phone</th><th>Email</th></tr></thead>
+          <tbody id="previewBody">
+            <tr><td colspan="4" class="empty-msg">No leads yet. Click "Start Scraping" above.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
-    <div class="toggle-row">
-      <label class="toggle-switch">
-        <input type="checkbox" id="autoNext" />
-        <span class="toggle-slider"></span>
-      </label>
-      <span>Auto-click "Next page"</span>
+  <!-- ===== Fields to Extract ===== -->
+  <div class="card collapsible">
+    <div class="card-header" id="fieldsHeader">
+      <div class="card-header-left">
+        <span class="header-icon">&#9881;</span>
+        <span>Fields to Extract</span>
+      </div>
+      <span class="chevron">&#9650;</span>
     </div>
-  </section>
-
-  <!-- Live Preview Panel (Feature 14) -->
-  <section class="card" id="previewPanel">
-    <div class="card-header">
-      <span>Live Preview (<span id="count">0</span> leads)</span>
-      <button id="togglePreview" class="btn-sm btn-ghost">Hide</button>
-    </div>
-    <div class="preview-table-wrap" id="previewTableWrap">
-      <table class="preview-table" id="previewTable">
-        <thead><tr><th>#</th><th>Name/Title</th><th>Phone</th></tr></thead>
-        <tbody id="previewBody">
-          <tr><td colspan="3" class="empty-msg">No leads yet</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- Fields to Extract -->
-  <section class="card">
-    <details open>
-      <summary class="card-header clickable">Fields to extract</summary>
+    <div class="card-body">
       <div class="fields-grid">
         <label class="field-chip"><input type="checkbox" id="f_title" checked /><span>Title</span></label>
         <label class="field-chip"><input type="checkbox" id="f_url" checked /><span>URL</span></label>
@@ -151,50 +224,102 @@
         <label class="field-chip"><input type="checkbox" id="f_emails" checked /><span>Emails</span></label>
         <label class="field-chip"><input type="checkbox" id="f_phones" checked /><span>Phones</span></label>
         <label class="field-chip"><input type="checkbox" id="f_position" /><span>Position</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_query" /><span>Search query</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_query" /><span>Search Query</span></label>
       </div>
-    </details>
-  </section>
+    </div>
+  </div>
 
-  <!-- Deep Scrape -->
-  <section class="card">
-    <button id="runDeep" class="btn-block btn-secondary">
-      Deep-scrape saved leads (find more emails/phones)
-    </button>
-  </section>
-
-  <!-- Account Rotation (Feature 5) -->
-  <section class="card">
-    <details>
-      <summary class="card-header clickable">Account Rotation</summary>
-      <div class="account-section">
-        <div class="account-info" id="accountInfo">
-          <small>Add Google accounts to rotate every 50 leads.</small>
-        </div>
-        <div class="account-list" id="accountList"></div>
-        <div class="inline-row">
-          <input type="text" id="newAccountLabel" placeholder="Account label (e.g. work@gmail.com)" class="input-sm" />
-          <button id="addAccountBtn" class="btn-sm btn-primary">Add</button>
-        </div>
-        <div class="inline-row" style="margin-top:6px;">
-          <label class="label-sm">Rotate every:</label>
-          <input type="number" id="rotationThreshold" min="10" max="200" value="50" class="input-xs" />
-          <span class="label-sm">leads</span>
-        </div>
+  <!-- ===== Account Rotation (Feature 5) ===== -->
+  <div class="card collapsible">
+    <div class="card-header" id="accountHeader">
+      <div class="card-header-left">
+        <span class="header-icon">&#128100;</span>
+        <span>Account Rotation</span>
+        <span class="badge-pill" id="activeAccountBadge">None</span>
       </div>
-    </details>
-  </section>
+      <span class="chevron">&#9650;</span>
+    </div>
+    <div class="card-body">
+      <div class="account-info" id="accountInfo">
+        <small>Add Google accounts to auto-rotate every 50 leads.</small>
+      </div>
+      <div class="account-list" id="accountList"></div>
+      <div class="inline-row">
+        <input type="text" id="newAccountLabel" placeholder="account@gmail.com" class="input-sm" />
+        <button id="addAccountBtn" class="btn-mini btn-primary">Add</button>
+      </div>
+      <div class="inline-row" style="margin-top:8px;">
+        <label class="label-sm">Rotate every:</label>
+        <input type="number" id="rotationThreshold" min="10" max="500" value="50" class="input-xs" />
+        <span class="label-sm">leads</span>
+      </div>
+    </div>
+  </div>
 
-  <!-- Export & Clear -->
-  <section class="export-section">
-    <button id="exportCsv" class="btn-half btn-secondary">Export CSV</button>
-    <button id="exportJson" class="btn-half btn-secondary">Export JSON</button>
-    <button id="clear" class="btn-block btn-danger-outline">Clear all leads</button>
-  </section>
+  <!-- ===== Anti-Detection ===== -->
+  <div class="card collapsible">
+    <div class="card-header" id="antiDetectHeader">
+      <div class="card-header-left">
+        <span class="header-icon">&#128737;</span>
+        <span>Anti-Detection</span>
+      </div>
+      <span class="chevron">&#9650;</span>
+    </div>
+    <div class="card-body">
+      <label class="toggle-row mini">
+        <span class="toggle-switch">
+          <input type="checkbox" id="randomDelay" checked />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text"><strong>Random Delays</strong><small>Mimic human scrolling speed</small></span>
+      </label>
+      <label class="toggle-row mini">
+        <span class="toggle-switch">
+          <input type="checkbox" id="captchaDetect" checked />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text"><strong>CAPTCHA Detection</strong><small>30-min cooldown on detection</small></span>
+      </label>
+      <label class="toggle-row mini">
+        <span class="toggle-switch">
+          <input type="checkbox" id="autoResume" checked />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text"><strong>Auto-resume</strong><small>Resume after browser restart</small></span>
+      </label>
+    </div>
+  </div>
 
-  <!-- Status bar -->
+  <!-- ===== Export ===== -->
+  <div class="card">
+    <div class="card-header" style="cursor:default;">
+      <div class="card-header-left">
+        <span class="header-icon">&#128190;</span>
+        <span>Export Leads</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="export-grid">
+        <button id="exportCsv" class="btn-block btn-secondary">
+          <span class="ic">&#128196;</span> CSV
+        </button>
+        <button id="exportJson" class="btn-block btn-secondary">
+          <span class="ic">&#123;&#125;</span> JSON
+        </button>
+      </div>
+      <button id="runDeep" class="btn-block btn-secondary" style="margin-top:8px;">
+        <span class="ic">&#128269;</span> Deep-Enrich Saved Leads
+      </button>
+      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:8px;">
+        <span class="ic">&#128465;</span> Clear All Leads
+      </button>
+    </div>
+  </div>
+
+  <!-- ===== Status Bar ===== -->
   <footer class="status-bar">
     <span id="status">Ready.</span>
+    <span class="version">v3.4.1</span>
   </footer>
 
   <script src="popup.js"></script>

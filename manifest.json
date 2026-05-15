@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Google Lead Scraper",
-  "version": "1.0.0",
-  "description": "Free Google search lead scraper. Extracts titles, URLs, descriptions, emails and phone numbers from SERP. No proxy, no API needed.",
+  "name": "Google Lead Scraper Pro",
+  "version": "3.4.1",
+  "description": "Advanced lead scraper for Google Search. CAPTCHA detection, multi-account rotation, smart suggestions, location auto-expand, deep enrichment, resume on failure.",
   "permissions": [
     "storage",
     "downloads",
     "scripting",
     "tabs",
     "notifications",
-    "alarms"
+    "alarms",
+    "clipboardRead"
   ],
   "host_permissions": [
     "https://www.google.com/*",
@@ -22,7 +23,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Google Lead Scraper",
+    "default_title": "Google Lead Scraper Pro",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -44,6 +45,12 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
