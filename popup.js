@@ -7,10 +7,12 @@ const statusEl = $("status");
 
 // Maps-specific fields
 const ALL_FIELDS = ["title", "phone", "email", "website", "address", "category",
-  "rating", "reviewCount", "hours", "domain", "latitude", "url"];
+  "rating", "reviewCount", "facebook", "instagram", "twitter", "youtube", "linkedin",
+  "hours", "domain", "latitude", "url"];
 const DEFAULT_FIELDS = {
   title: true, phone: true, email: true, website: true,
   address: true, category: true, rating: true, reviewCount: true,
+  facebook: true, instagram: true, twitter: true, youtube: true, linkedin: false,
   hours: false, domain: false, latitude: false, url: false
 };
 
@@ -74,7 +76,7 @@ async function loadSettings() {
     "savedKeywords", "savedLocations"
   ]);
   $("autoScrape").checked = !!s.autoScrape;
-  $("deepEnrich").checked = !!s.deepEnrich;
+  $("deepEnrich").checked = s.deepEnrich !== false;
   $("autoMaxPages").value = s.autoMaxPages || 50;
   $("profileWait").value = s.profileWait || 7;
   $("targetLeads").value = s.targetLeads || 100;

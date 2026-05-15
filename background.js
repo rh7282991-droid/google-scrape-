@@ -15,7 +15,9 @@ function leadsToCsv(leads) {
   // Maps-specific preferred order
   const preferred = [
     "title", "phone", "email", "website", "address", "category",
-    "rating", "reviewCount", "hours", "domain",
+    "rating", "reviewCount",
+    "facebook", "instagram", "twitter", "youtube", "linkedin",
+    "hours", "domain",
     "latitude", "longitude", "plusCode", "url", "scrapedAt"
   ];
   const headers = preferred.filter(k => keys.has(k))
@@ -37,33 +39,120 @@ function downloadText(text, filename, mime) {
   return chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
 }
 
-// ----- Deep enrichment (visit websites for emails) -----
-const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+// ----- Deep enrichment (visit websites for emails + socials) -----
+const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+const EMAIL_SKIP = /(example\.com|sentry|wixpress|gmail-noreply|noreply@|@x\.com|@2x\.|@3x\.|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.webp)/i;
 
-function extractContactsFromHtml(html) {
+// Match a real social-media profile/page URL, NOT a share/intent link.
+const SOCIAL_PATTERNS = {
+  facebook:  /https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/([A-Za-z0-9.\-_]+)(?:\/?|\?)/i,
+  instagram: /https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9._]+)(?:\/?|\?)/i,
+  twitter:   /https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/([A-Za-z0-9_]+)(?:\/?|\?)/i,
+  youtube:   /https?:\/\/(?:www\.)?youtube\.com\/(?:c\/|channel\/|user\/|@)?([A-Za-z0-9_\-.]+)(?:\/?|\?)/i,
+  linkedin:  /https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in|school)\/([A-Za-z0-9\-_.]+)(?:\/?|\?)/i,
+};
+// These usernames belong to share-buttons or generic pages, not the business itself.
+const SOCIAL_BLOCKLIST = /^(sharer|sharer\.php|share|intent|tr|home|login|signup|watch|results|pages|dialog|plugins|hashtag|search|explore|reel|reels|p|stories|tv|public|profile\.php)$/i;
+
+function pickFirstSocial(html, key) {
+  const re = SOCIAL_PATTERNS[key];
+  if (!re) return "";
+  const matches = html.match(new RegExp(re.source, "gi")) || [];
+  for (const m of matches) {
+    const sub = m.match(re);
+    if (!sub) continue;
+    let handle = sub[1] || "";
+    // Strip trailing .php / .html etc that sneak through the regex
+    handle = handle.replace(/\.(php|html?|aspx?)$/i, "");
+    if (!handle || SOCIAL_BLOCKLIST.test(handle)) continue;
+    // Strip query string / trailing slash
+    return m.split(/[?#]/)[0].replace(/\/$/, "");
+  }
+  return "";
+}
+
+function extractContactsFromHtml(html, baseUrl) {
+  // Strip script/style for clean text scan
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ");
 
+  // Emails
   const mailtos = Array.from(html.matchAll(/mailto:([^"'>\s?]+)/gi)).map(m => m[1]);
-  const tels = Array.from(html.matchAll(/tel:([^"'>\s?]+)/gi)).map(m => m[1]);
-
   const emails = Array.from(new Set(
     [...mailtos, ...(text.match(EMAIL_RE) || [])]
-      .map(s => s.toLowerCase())
-      .filter(s => !/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(s))
+      .map(s => s.toLowerCase().trim())
+      .filter(s => !EMAIL_SKIP.test(s))
   ));
 
-  const phonesRaw = [...tels, ...(text.match(PHONE_RE) || [])];
+  // Phones
+  const tels = Array.from(html.matchAll(/tel:([^"'>\s?]+)/gi)).map(m => m[1]);
   const phones = Array.from(new Set(
-    phonesRaw.map(p => p.trim()).filter(p => {
-      const digits = p.replace(/\D/g, "");
-      return digits.length >= 8 && digits.length <= 15;
-    })
+    [...tels, ...(text.match(PHONE_RE) || [])]
+      .map(p => p.trim())
+      .filter(p => {
+        const d = p.replace(/\D/g, "");
+        return d.length >= 8 && d.length <= 15;
+      })
   ));
-  return { emails, phones };
+
+  // Socials — only real profile links, never share-button urls
+  const socials = {
+    facebook:  pickFirstSocial(html, "facebook"),
+    instagram: pickFirstSocial(html, "instagram"),
+    twitter:   pickFirstSocial(html, "twitter"),
+    youtube:   pickFirstSocial(html, "youtube"),
+    linkedin:  pickFirstSocial(html, "linkedin"),
+  };
+
+  return { emails, phones, ...socials };
+}
+
+// Cache websites for 1 hour to avoid re-fetching duplicates within a campaign
+const _websiteCache = new Map();
+async function fetchWebsiteContacts(websiteUrl) {
+  if (!websiteUrl) return { ok: false, error: "no url" };
+
+  const cached = _websiteCache.get(websiteUrl);
+  if (cached && (Date.now() - cached.t) < 60 * 60 * 1000) return cached.v;
+
+  // Try the homepage AND a /contact-style page for better recall
+  const candidates = [websiteUrl];
+  try {
+    const u = new URL(websiteUrl);
+    for (const path of ["/contact", "/contact-us", "/contacts", "/about", "/about-us"]) {
+      candidates.push(u.origin + path);
+    }
+  } catch (_) {}
+
+  let combined = { emails: [], phones: [], facebook: "", instagram: "", twitter: "", youtube: "", linkedin: "" };
+  for (const url of candidates.slice(0, 3)) {        // cap at 3 fetches per lead
+    const html = await fetchPage(url);
+    if (!html) continue;
+    const got = extractContactsFromHtml(html, url);
+    combined.emails = Array.from(new Set([...combined.emails, ...got.emails]));
+    combined.phones = Array.from(new Set([...combined.phones, ...got.phones]));
+    for (const k of ["facebook", "instagram", "twitter", "youtube", "linkedin"]) {
+      if (!combined[k] && got[k]) combined[k] = got[k];
+    }
+    // Stop early if we already have an email + at least one social
+    if (combined.emails.length && (combined.facebook || combined.instagram)) break;
+  }
+
+  const out = {
+    ok: true,
+    email: combined.emails[0] || "",
+    allEmails: combined.emails,
+    facebook: combined.facebook,
+    instagram: combined.instagram,
+    twitter: combined.twitter,
+    youtube: combined.youtube,
+    linkedin: combined.linkedin,
+  };
+  _websiteCache.set(websiteUrl, { t: Date.now(), v: out });
+  return out;
 }
 
 async function fetchPage(url) {
@@ -121,17 +210,22 @@ async function deepScrapeAll() {
 
       const html = await fetchPage(lead.website);
       if (!html) return;
-      const { emails, phones } = extractContactsFromHtml(html);
+      const got = extractContactsFromHtml(html, lead.website);
 
-      if (emails.length && !lead.email) lead.email = emails[0];
-      lead.allEmails = emails;
-      if (phones.length && !lead.phone) lead.phone = phones[0];
-      lead.allPhones = phones;
+      if (got.emails.length && !lead.email) lead.email = got.emails[0];
+      lead.allEmails = got.emails;
+      if (got.phones.length && !lead.phone) lead.phone = got.phones[0];
+      lead.allPhones = got.phones;
+      if (!lead.facebook  && got.facebook)  lead.facebook  = got.facebook;
+      if (!lead.instagram && got.instagram) lead.instagram = got.instagram;
+      if (!lead.twitter   && got.twitter)   lead.twitter   = got.twitter;
+      if (!lead.youtube   && got.youtube)   lead.youtube   = got.youtube;
+      if (!lead.linkedin  && got.linkedin)  lead.linkedin  = got.linkedin;
       lead.deepScrapedAt = new Date().toISOString();
 
-      if (emails.length || phones.length) {
+      if (got.emails.length || got.phones.length) {
         updated++;
-        totalContacts += emails.length + phones.length;
+        totalContacts += got.emails.length + got.phones.length;
       }
       await setProgress({ totalFound: totalContacts });
     }));
@@ -270,6 +364,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "DEEP_SCRAPE_ALL") {
         sendResponse(await deepScrapeAll());
+      } else if (msg.type === "FETCH_WEBSITE_CONTACTS") {
+        sendResponse(await fetchWebsiteContacts(msg.url));
       } else if (msg.type === "FETCH_SUGGESTIONS") {
         sendResponse({ suggestions: await fetchGoogleSuggestions(msg.query) });
       } else if (msg.type === "CAPTCHA_DETECTED") {
