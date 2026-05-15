@@ -55,7 +55,6 @@ async function refreshCounts() {
     await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
   $("totalCount").textContent = leads.length;
   $("totalLeadsHeader").textContent = leads.length;
-  $("previewCount").textContent = leads.length;
   $("todayCount").textContent = todayLeadCount;
   const left = lifetimeQuota - leads.length;
   $("quotaLeft").textContent = left > 99999 ? "∞" : Math.max(0, left);
@@ -157,22 +156,7 @@ $("clearCampaign").addEventListener("click", async () => {
   setStatus("Campaign inputs cleared.");
 });
 
-// ===== Live Preview Table =====
-async function renderPreviewTable() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  const tbody = $("previewBody");
-  if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
-    return;
-  }
-  const last10 = leads.slice(-10).reverse();
-  tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "\u2014").slice(0, 22);
-    const phone = (lead.phone || "\u2014").slice(0, 14);
-    const addr = (lead.address || "\u2014").slice(0, 20);
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
-  }).join("");
-}
+
 
 // ===== Collapsible Cards =====
 function setupCollapsibles() {
@@ -391,7 +375,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.progress) renderProgress(changes.progress.newValue);
   if (changes.leads) {
     refreshCounts();
-    renderPreviewTable();
   }
   if (changes.accounts || changes.activeAccountIndex) renderAccounts();
   if (changes.captchaDetected) checkCaptchaCooldown();
@@ -446,7 +429,6 @@ $("scrapeNow").addEventListener("click", async () => {
     setStatusBadge("error");
   }
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Settings listeners =====
@@ -477,7 +459,6 @@ $("runDeep").addEventListener("click", async () => {
   }
   setStatusBadge("ready");
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Export =====
@@ -497,7 +478,6 @@ $("clear").addEventListener("click", async () => {
   await chrome.storage.local.remove(["campaignState"]);
   setStatus("All leads cleared.");
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Account Management =====
@@ -566,7 +546,6 @@ $("rotationThreshold").addEventListener("change", async (e) => {
 loadSettings();
 refreshCounts();
 pollProgress();
-renderPreviewTable();
 checkResumeCampaign();
 renderAccounts();
 checkCaptchaCooldown();
