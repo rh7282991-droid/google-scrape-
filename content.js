@@ -324,9 +324,9 @@
     for (let i = 0; i < results.length && !SHOULD_STOP; i++) {
       const { card, data } = results[i];
 
-      // Skip ONLY if has phone WITH country code AND website AND address
-      const hasFullPhone = data.phone && data.phone.startsWith("+");
-      if (hasFullPhone && data.website && data.address) continue;
+      // Click ALL profiles — detail panel has accurate phone/category/hours/address
+      // Only skip if FULLY enriched from a previous run
+      if (data._enriched) continue;
 
       // CAPTCHA check every 8 profiles
       if (enriched > 0 && enriched % 8 === 0) {
@@ -355,14 +355,15 @@
         // Extract from detail panel
         const detail = extractFromDetailPanel();
 
-        // Merge: detail ALWAYS wins for phone (has country code)
-        if (detail.phone) data.phone = detail.phone; // Always use detail phone (has +country code)
-        if (detail.website && !data.website) data.website = detail.website;
-        if (detail.address && !data.address) data.address = detail.address;
+        // Detail panel ALWAYS wins — most accurate data source
+        if (detail.phone) data.phone = detail.phone;
+        if (detail.website) data.website = detail.website;
+        if (detail.address) data.address = detail.address;
+        if (detail.category) data.category = detail.category;
+        if (detail.hours) data.hours = detail.hours;
         if (detail.email) data.email = detail.email;
-        if (detail.hours && !data.hours) data.hours = detail.hours;
-        if (detail.category && !data.category) data.category = detail.category;
         if (detail.plusCode) data.plusCode = detail.plusCode;
+        data._enriched = true;
 
         // Domain from website
         if (data.website && !data.domain) {
@@ -387,16 +388,18 @@
   function extractFromDetailPanel() {
     const out = {};
 
-    // Phone — THE most reliable way: data-item-id contains the number!
+    // Iterate ALL data-item-id elements — Google Maps structured data
     document.querySelectorAll('[data-item-id]').forEach(el => {
       const id = el.getAttribute("data-item-id") || "";
       const aria = el.getAttribute("aria-label") || "";
+      const text = el.textContent || "";
 
-      // Phone: data-item-id="phone:tel:+8801XXX" — FULL number with country code
+      // Phone: data-item-id="phone:tel:+8801XXX" or "phone:tel:01714..."
       if (id.startsWith("phone:tel:")) {
-        out.phone = id.replace("phone:tel:", "").trim();
+        const rawPhone = id.replace("phone:tel:", "").trim();
+        out.phone = rawPhone;
       }
-      // Address: aria-label has clean address
+      // Address: aria-label has clean full address
       if (id === "address" && aria) {
         out.address = aria.replace(/^Address:\s*/i, "").trim();
       }
@@ -407,27 +410,34 @@
           out.website = href;
         }
       }
-      // Hours: id starts with "oh"
+      // Hours: id starts with "oh" — get FULL schedule from aria-label
       if (id.startsWith("oh") && !out.hours) {
-        out.hours = (aria || el.textContent || "").split("\n")[0].trim();
+        // aria-label contains full schedule like "Monday, 9 AM to 10 PM; Tuesday..."
+        if (aria && aria.length > 10) {
+          out.hours = aria.trim();
+        } else {
+          // Fallback: get visible text
+          const hoursText = text.split("\n").filter(l => l.trim()).join("; ");
+          if (hoursText) out.hours = hoursText;
+        }
       }
       // Plus code
       if (id === "oloc") {
-        out.plusCode = el.textContent.trim();
+        out.plusCode = text.trim();
       }
     });
 
-    // Fallback phone from tel: link (includes country code)
+    // Fallback phone from tel: link
     if (!out.phone) {
       const tel = document.querySelector('a[href^="tel:"]');
       if (tel) out.phone = tel.href.replace("tel:", "").trim();
     }
 
-    // Fallback: aria-label on phone button often has full number
+    // Fallback: phone from aria-label
     if (!out.phone) {
-      const phoneBtn = document.querySelector('[data-item-id*="phone"], [aria-label*="Phone" i]');
-      if (phoneBtn) {
-        const label = phoneBtn.getAttribute("aria-label") || "";
+      const phoneEl = document.querySelector('[data-item-id*="phone"], [aria-label*="Phone" i]');
+      if (phoneEl) {
+        const label = phoneEl.getAttribute("aria-label") || "";
         const m = label.match(/(\+?\d[\d\s\-().]{7,}\d)/);
         if (m) out.phone = m[1].trim();
       }
@@ -441,24 +451,30 @@
       }
     }
 
+    // Category — from button or dedicated element
+    const catEl = document.querySelector('button[jsaction*="category"], .DkEaL, span.DkEaL');
+    if (catEl) out.category = catEl.textContent.trim();
+
     // Email
     const mailto = document.querySelector('a[href^="mailto:"]');
     if (mailto) out.email = mailto.href.replace("mailto:", "").split("?")[0].trim();
-
-    // Category
-    const catEl = document.querySelector('button[jsaction*="category"], .DkEaL');
-    if (catEl) out.category = catEl.textContent.trim();
 
     return out;
   }
 
   // ============================================
   // PHASE 3: Save + Trigger Deep Enrich
+  // Only saves fields that user has selected in popup
   // ============================================
   async function phase3_save(results) {
     log("Phase 3: Saving leads...");
-    const { leads = [] } = await chrome.storage.local.get(["leads"]);
+    const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
     let saved = 0;
+
+    // Which fields are enabled (from popup checkboxes)
+    const enabledFields = Object.keys(fields).filter(k => fields[k]);
+    // Always include these for dedup
+    const alwaysKeep = ["url", "scrapedAt"];
 
     for (const { data } of results) {
       if (!data || !data.title) continue;
@@ -470,7 +486,17 @@
       );
       if (exists) continue;
 
-      leads.push(data);
+      // Filter to only selected fields
+      const filtered = {};
+      for (const key of [...enabledFields, ...alwaysKeep]) {
+        if (data[key] !== undefined && data[key] !== null && data[key] !== "") {
+          filtered[key] = data[key];
+        }
+      }
+      // Always keep title for identification
+      if (data.title) filtered.title = data.title;
+
+      leads.push(filtered);
       saved++;
     }
 
