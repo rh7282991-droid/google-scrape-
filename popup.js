@@ -471,9 +471,11 @@ $("exportCsv").addEventListener("click", async () => {
 });
 
 $("exportTsv").addEventListener("click", async () => {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
   if (!leads.length) { setStatus("Nothing to export."); return; }
-  const keys = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain"];
+  // Use only fields that exist in the data (dynamic columns)
+  const allPossible = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain", "facebook", "instagram", "twitter", "linkedin", "youtube", "whatsapp", "tiktok"];
+  const keys = allPossible.filter(k => leads.some(l => l[k] != null && l[k] !== ""));
   const header = keys.join("\t");
   const rows = leads.map(l => keys.map(k => (l[k] != null ? String(l[k]) : "")).join("\t"));
   const tsv = [header, ...rows].join("\n");
@@ -481,22 +483,24 @@ $("exportTsv").addEventListener("click", async () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `maps-leads-${new Date().toISOString().slice(0, 10)}.tsv`;
+  a.download = `google-leads-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, "-")}.tsv`;
   a.click();
   URL.revokeObjectURL(url);
   setStatus("TSV exported (Google Sheets compatible).");
 });
 
 $("copySheets").addEventListener("click", async () => {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
   if (!leads.length) { setStatus("Nothing to copy."); return; }
-  const keys = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain"];
+  // Use only fields that exist in the data (dynamic columns)
+  const allPossible = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain", "facebook", "instagram", "twitter", "linkedin", "youtube", "whatsapp", "tiktok"];
+  const keys = allPossible.filter(k => leads.some(l => l[k] != null && l[k] !== ""));
   const header = keys.join("\t");
   const rows = leads.map(l => keys.map(k => (l[k] != null ? String(l[k]) : "")).join("\t"));
   const tsv = [header, ...rows].join("\n");
   try {
     await navigator.clipboard.writeText(tsv);
-    setStatus("Copied! Open Google Sheets → Ctrl+V to paste.");
+    setStatus(`Copied ${leads.length} leads! Open Google Sheets → Ctrl+V to paste.`);
   } catch (e) {
     setStatus("Copy failed. Try again.");
   }

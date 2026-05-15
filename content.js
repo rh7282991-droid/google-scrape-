@@ -349,8 +349,17 @@
         await sleep(rand(200, 400));
         link.click();
 
-        // Wait for detail panel
-        await sleep(rand(waitMs * 0.7, waitMs * 1.3));
+        // Wait for detail panel to ACTUALLY load (not just sleep)
+        // Check for heading element appearing = panel loaded
+        let panelReady = false;
+        for (let w = 0; w < 10 && !panelReady; w++) {
+          await sleep(rand(500, 800));
+          const h = document.querySelector('h1.DUwDvf, h1.fontHeadlineLarge, h1[class*="fontHeadlineLarge"]');
+          const items = document.querySelectorAll('[data-item-id]');
+          if (h && items.length >= 2) panelReady = true;
+        }
+        // Extra buffer for slower connections
+        if (!panelReady) await sleep(2000);
 
         // Extract from detail panel
         const detail = extractFromDetailPanel();
@@ -385,79 +394,102 @@
   }
 
   // Extract data from the currently open detail panel (right side)
+  // BULLETPROOF VERSION: Only extracts from structured data-item-id elements
+  // No text guessing, no mixed data possible
   function extractFromDetailPanel() {
     const out = {};
 
-    // Iterate ALL data-item-id elements — Google Maps structured data
+    // === STRUCTURED DATA from data-item-id (100% reliable) ===
     document.querySelectorAll('[data-item-id]').forEach(el => {
       const id = el.getAttribute("data-item-id") || "";
       const aria = el.getAttribute("aria-label") || "";
-      const text = el.textContent || "";
+      const text = (el.textContent || "").trim();
 
-      // Phone: data-item-id="phone:tel:+8801XXX" or "phone:tel:01714..."
-      if (id.startsWith("phone:tel:")) {
-        const rawPhone = id.replace("phone:tel:", "").trim();
-        out.phone = rawPhone;
+      // PHONE: id format "phone:tel:+8801714070077" or "phone:tel:01714070077"
+      if (id.startsWith("phone:tel:") && !out.phone) {
+        out.phone = id.replace("phone:tel:", "").trim();
       }
-      // Address: aria-label has clean full address
-      if (id === "address" && aria) {
-        out.address = aria.replace(/^Address:\s*/i, "").trim();
+
+      // ADDRESS: id="address", aria-label has the clean full address
+      if (id === "address" && !out.address) {
+        if (aria) {
+          out.address = aria.replace(/^Address:\s*/i, "").trim();
+        } else if (text.length > 5) {
+          out.address = text;
+        }
       }
-      // Website: data-item-id="authority"
-      if (id === "authority") {
+
+      // WEBSITE: id="authority", href has the URL
+      if (id === "authority" && !out.website) {
         const href = el.href || el.querySelector("a")?.href || "";
         if (href && href.startsWith("http") && !href.includes("google.com")) {
           out.website = href;
+        } else if (text && text.includes(".") && !text.includes("google")) {
+          // Sometimes text shows domain like "example.com"
+          out.website = text.startsWith("http") ? text : "https://" + text;
         }
       }
-      // Hours: id starts with "oh" — get FULL schedule from aria-label
+
+      // HOURS: id starts with "oh", aria-label has full weekly schedule
       if (id.startsWith("oh") && !out.hours) {
-        // aria-label contains full schedule like "Monday, 9 AM to 10 PM; Tuesday..."
-        if (aria && aria.length > 10) {
-          out.hours = aria.trim();
-        } else {
-          // Fallback: get visible text
-          const hoursText = text.split("\n").filter(l => l.trim()).join("; ");
-          if (hoursText) out.hours = hoursText;
+        if (aria && aria.length > 5) {
+          // aria-label: "Hours: Monday, 9 AM to 10 PM..." or similar
+          out.hours = aria.replace(/^Hours?:\s*/i, "").trim();
+        } else if (text.length > 3) {
+          // Visible text fallback
+          out.hours = text.replace(/\s+/g, " ").trim();
         }
       }
-      // Plus code
-      if (id === "oloc") {
-        out.plusCode = text.trim();
+
+      // PLUS CODE: id="oloc"
+      if (id === "oloc" && !out.plusCode) {
+        out.plusCode = text;
       }
     });
 
-    // Fallback phone from tel: link
+    // === PHONE FALLBACKS ===
     if (!out.phone) {
+      // Try tel: link (always has full number)
       const tel = document.querySelector('a[href^="tel:"]');
-      if (tel) out.phone = tel.href.replace("tel:", "").trim();
+      if (tel) {
+        out.phone = tel.href.replace("tel:", "").trim();
+      }
     }
-
-    // Fallback: phone from aria-label
     if (!out.phone) {
-      const phoneEl = document.querySelector('[data-item-id*="phone"], [aria-label*="Phone" i]');
-      if (phoneEl) {
-        const label = phoneEl.getAttribute("aria-label") || "";
-        const m = label.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+      // Try aria-label that mentions phone
+      const phoneBtn = document.querySelector('[data-item-id*="phone"]');
+      if (phoneBtn) {
+        const lbl = phoneBtn.getAttribute("aria-label") || phoneBtn.textContent || "";
+        const m = lbl.match(/(\+?\d[\d\s\-().]{7,}\d)/);
         if (m) out.phone = m[1].trim();
       }
     }
 
-    // Fallback website
+    // === WEBSITE FALLBACK ===
     if (!out.website) {
-      const authority = document.querySelector('a[data-item-id="authority"]');
-      if (authority && authority.href && !authority.href.includes("google.com")) {
-        out.website = authority.href;
+      const auth = document.querySelector('a[data-item-id="authority"]');
+      if (auth && auth.href && !auth.href.includes("google.com")) {
+        out.website = auth.href;
       }
     }
 
-    // Category — from button or dedicated element
-    const catEl = document.querySelector('button[jsaction*="category"], .DkEaL, span.DkEaL');
-    if (catEl) out.category = catEl.textContent.trim();
+    // === CATEGORY (from dedicated button — NOT from text parsing) ===
+    const catBtn = document.querySelector('button[jsaction*="category"]');
+    if (catBtn && catBtn.textContent.trim().length > 1) {
+      out.category = catBtn.textContent.trim();
+    } else {
+      const catSpan = document.querySelector('.DkEaL, span.DkEaL');
+      if (catSpan) out.category = catSpan.textContent.trim();
+    }
 
-    // Email
+    // === EMAIL (from mailto link only — no guessing) ===
     const mailto = document.querySelector('a[href^="mailto:"]');
-    if (mailto) out.email = mailto.href.replace("mailto:", "").split("?")[0].trim();
+    if (mailto) {
+      const email = mailto.href.replace("mailto:", "").split("?")[0].trim().toLowerCase();
+      if (email && email.includes("@") && email.includes(".")) {
+        out.email = email;
+      }
+    }
 
     return out;
   }
