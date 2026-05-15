@@ -12,6 +12,7 @@
   "host_permissions": [
     "https://www.google.com/*",
     "https://google.com/*",
+    "https://suggestqueries.google.com/*",
     "<all_urls>"
   ],
   "background": {

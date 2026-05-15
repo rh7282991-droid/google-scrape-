@@ -27,7 +27,59 @@
     <div class="progress-current" id="progCurrent"></div>
   </section>
 
+  <!-- Feature 14: Live Preview Panel -->
+  <section class="preview-panel" id="previewPanel">
+    <div class="preview-header">
+      <span>Live Preview (last 10)</span>
+      <button id="togglePreview" class="mini-btn">Hide</button>
+    </div>
+    <div class="preview-table-wrap" id="previewTableWrap">
+      <table class="preview-table" id="previewTable">
+        <thead><tr><th>#</th><th>Name/Title</th><th>Phone</th></tr></thead>
+        <tbody id="previewBody">
+          <tr><td colspan="3" class="empty-msg">No leads yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Feature 17: Resume from Failure -->
+  <section class="resume-banner" id="resumeBanner" style="display:none;">
+    <div class="resume-content">
+      <span class="resume-icon">⚡</span>
+      <div class="resume-text">
+        <strong>Resume previous campaign?</strong>
+        <small id="resumeInfo">0 leads collected, page 0/0</small>
+      </div>
+    </div>
+    <div class="resume-actions">
+      <button id="resumeYes" class="mini-btn primary">Resume</button>
+      <button id="resumeNo" class="mini-btn danger">Dismiss</button>
+    </div>
+  </section>
+
   <section class="controls">
+    <!-- Feature 15: Smart Search Suggestions -->
+    <div class="search-suggest-box">
+      <label for="searchInput">Search keyword:</label>
+      <div class="suggest-wrap">
+        <input type="text" id="searchInput" placeholder="e.g. cafe, plumber, dentist..." autocomplete="off" />
+        <ul class="suggest-list" id="suggestList"></ul>
+      </div>
+    </div>
+
+    <!-- Feature 16: Location Auto-Expand -->
+    <div class="location-expand-box">
+      <label for="locationInput">Location:</label>
+      <div class="suggest-wrap">
+        <input type="text" id="locationInput" placeholder="e.g. Dhaka, Chittagong..." autocomplete="off" />
+        <ul class="suggest-list" id="locationSuggestList"></ul>
+      </div>
+      <div class="location-chips" id="locationChips"></div>
+    </div>
+
+    <hr />
+
     <details class="field-picker" open>
       <summary>Fields to extract</summary>
       <div class="grid2">

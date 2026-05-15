@@ -166,6 +166,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "DEEP_SCRAPE_ALL") {
         const r = await deepScrapeAll();
         sendResponse(r);
+      } else if (msg.type === "FETCH_SUGGESTIONS") {
+        // Feature 15: Smart Search Suggestions via Google Autocomplete
+        const suggestions = await fetchGoogleSuggestions(msg.query);
+        sendResponse({ suggestions });
+      } else if (msg.type === "SAVE_CAMPAIGN_STATE") {
+        // Feature 17: Save campaign state for resume
+        await chrome.storage.local.set({ campaignState: msg.state });
+        sendResponse({ ok: true });
       } else {
         sendResponse({ ok: false, error: "unknown message" });
       }
@@ -174,6 +182,70 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
   })();
   return true;
+});
+
+// ===== Feature 15: Google Autocomplete Suggestions =====
+async function fetchGoogleSuggestions(query) {
+  if (!query || query.length < 2) return [];
+  try {
+    const url = `https://suggestqueries.google.com/complete/search?client=chrome&q=${encodeURIComponent(query)}`;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return [];
+    const data = await res.json();
+    // data format: [query, [suggestions], ...]
+    if (Array.isArray(data) && Array.isArray(data[1])) {
+      return data[1].slice(0, 8);
+    }
+    return [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// ===== Feature 17: Monitor tab changes to save campaign state =====
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  if (!tab.url || !/^https?:\/\/(www\.)?google\.com\/search/.test(tab.url)) return;
+
+  const { autoScrape, autoNext, autoMaxPages } = await chrome.storage.local.get(["autoScrape", "autoNext", "autoMaxPages"]);
+  if (!autoScrape && !autoNext) return;
+
+  // Save campaign state for resume
+  const urlObj = new URL(tab.url);
+  const query = urlObj.searchParams.get("q") || "";
+  const start = Number(urlObj.searchParams.get("start") || 0);
+  const currentPage = Math.floor(start / 10) + 1;
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+
+  await chrome.storage.local.set({
+    campaignState: {
+      isActive: true,
+      completed: false,
+      query,
+      currentPage,
+      totalPages: Number(autoMaxPages || 5),
+      leadsCollected: leads.length,
+      lastUrl: tab.url,
+      savedAt: Date.now()
+    }
+  });
+});
+
+// Mark campaign complete when auto-scrape finishes
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.autoScrape && changes.autoScrape.newValue === false) {
+    chrome.storage.local.get(["campaignState"]).then(({ campaignState }) => {
+      if (campaignState && campaignState.isActive) {
+        campaignState.completed = true;
+        campaignState.isActive = false;
+        chrome.storage.local.set({ campaignState });
+      }
+    });
+  }
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
