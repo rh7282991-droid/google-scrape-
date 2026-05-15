@@ -1,34 +1,28 @@
-// content.js — Google Maps scraping engine.
-// Runs on the Google Maps page. Handles search, scroll, profile clicks, and extraction.
+// content.js — Google Maps scraping engine v2
+// Strategy: navigate via SPA, scroll feed, click each place link, wait for URL to
+// become /maps/place/, extract via stable data-item-id attributes.
 
 (function () {
   "use strict";
   if (window.__GMS_LOADED__) return;
   window.__GMS_LOADED__ = true;
 
-  // ---------- Runtime state ----------
+  // ---------- Runtime ----------
   const RT = {
-    status: "idle",       // idle | running | paused | stopped
-    config: null,         // user campaign config
-    queue: [],            // [{keyword, location}]
-    currentTask: null,
+    status: "idle",
+    config: null,
+    queue: [],
     target: 0,
     collected: 0,
-    seenNames: new Set(),
+    seen: new Set(),
     seenUrls: new Set(),
-    abortFlag: false
+    abort: false
   };
 
-  // ---------- Helpers ----------
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const rand = (min, max) => min + Math.floor(Math.random() * (max - min));
-
-  async function waitWhilePaused() {
-    while (RT.status === "paused") await sleep(300);
-  }
-  function shouldStop() {
-    return RT.status === "stopped" || RT.abortFlag;
-  }
+  const rand = (a, b) => a + Math.floor(Math.random() * (b - a));
+  const shouldStop = () => RT.status === "stopped" || RT.abort;
+  const waitWhilePaused = async () => { while (RT.status === "paused") await sleep(300); };
 
   async function pushLog(msg) {
     const { state = {} } = await chrome.storage.local.get(["state"]);
@@ -37,240 +31,266 @@
     await saveState({ logs });
     console.log("[GMS]", msg);
   }
-
   async function saveState(patch) {
     const { state = {} } = await chrome.storage.local.get(["state"]);
-    const next = { ...state, ...patch };
-    await chrome.storage.local.set({ state: next });
+    await chrome.storage.local.set({ state: { ...state, ...patch } });
   }
-
   async function recountStats() {
     const { leads = [] } = await chrome.storage.local.get(["leads"]);
-    const phoneCount = leads.filter(l => l.phone).length;
-    const addressCount = leads.filter(l => l.address).length;
     await saveState({
       collected: leads.length,
-      phoneCount,
-      addressCount,
+      phoneCount: leads.filter(l => l.phone).length,
+      addressCount: leads.filter(l => l.address).length,
       queue: RT.queue.length,
       target: RT.target,
       status: RT.status
     });
   }
 
-  // ---------- DOM helpers ----------
-  function getResultsContainer() {
-    // The scrolling list of search results
+  // ---------- Page detection ----------
+  const isSearchPage = () => /\/maps\/search\//.test(location.pathname);
+  const isPlacePage  = () => /\/maps\/place\//.test(location.pathname);
+
+  function getFeed() {
     return document.querySelector('div[role="feed"]') ||
-           document.querySelector('div[aria-label*="Results"]') ||
-           document.querySelector('.m6QErb[aria-label]');
+           document.querySelector('div[aria-label*="Results" i]') ||
+           document.querySelector('[role="main"] div[tabindex="-1"]');
   }
 
-  function getResultCards() {
-    const feed = getResultsContainer();
+  function getPlaceCards() {
+    const feed = getFeed();
     if (!feed) return [];
-    // Each business is an <a href="/maps/place/..."> within the feed
-    return Array.from(feed.querySelectorAll('a[href*="/maps/place/"]'));
+    const cards = Array.from(feed.querySelectorAll('a[href*="/maps/place/"]'));
+    const seen = new Set();
+    return cards.filter(a => {
+      const href = a.href;
+      if (seen.has(href)) return false;
+      seen.add(href);
+      return true;
+    });
   }
 
-  function getDetailPanel() {
-    // The right-side detail panel that opens when a place is clicked
+  function getMainPanel() {
     return document.querySelector('div[role="main"][aria-label]') ||
            document.querySelector('div[role="main"]');
   }
 
-  // ---------- Search navigation ----------
-  async function navigateToSearch(query) {
-    const url = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
-    if (location.href.split("?")[0] !== url.split("?")[0]) {
-      location.href = url;
-      // Page will reload; engine will resume on next load via persisted state
-      return false;
-    }
-    return true;
-  }
-
-  async function waitForFeed(timeoutMs = 12000) {
-    const t0 = Date.now();
-    while (Date.now() - t0 < timeoutMs) {
-      if (shouldStop()) return false;
-      const feed = getResultsContainer();
-      if (feed && getResultCards().length > 0) return true;
-      await sleep(500);
-    }
-    return false;
-  }
-
-  // ---------- Scroll the feed to load more results ----------
-  async function scrollFeed(maxScrolls) {
-    const feed = getResultsContainer();
-    if (!feed) return 0;
-
-    let lastCount = 0;
-    let stagnant = 0;
-    for (let i = 0; i < maxScrolls; i++) {
-      if (shouldStop()) break;
-      await waitWhilePaused();
-
-      feed.scrollTop = feed.scrollHeight;
-      await sleep(rand(900, 1500));
-
-      const cards = getResultCards();
-      const txt = (feed.textContent || "").slice(-200);
-      // "You've reached the end of the list."
-      if (/end of the list|end of results/i.test(txt)) {
-        await pushLog(`Reached end of list after ${i + 1} scrolls (${cards.length} results)`);
-        return cards.length;
-      }
-      if (cards.length === lastCount) {
-        stagnant++;
-        if (stagnant >= 3) {
-          await pushLog(`No new results after ${i + 1} scrolls (${cards.length} results)`);
-          return cards.length;
-        }
-      } else {
-        stagnant = 0;
-        lastCount = cards.length;
-      }
-    }
-    return getResultCards().length;
-  }
-
-  // ---------- Extract data from the open detail panel ----------
-  function extractFromDetailPanel() {
-    const panel = getDetailPanel();
+  // ---------- Single source of truth: extract from a place page ----------
+  function extractPlace() {
+    const panel = getMainPanel();
     if (!panel) return null;
 
-    const txt = (sel) => {
-      const el = panel.querySelector(sel);
-      return el ? (el.textContent || "").trim() : "";
-    };
-    const attr = (sel, name) => {
-      const el = panel.querySelector(sel);
-      return el ? (el.getAttribute(name) || "") : "";
-    };
+    const h1 = panel.querySelector('h1');
+    if (!h1) return null;
+    const name = h1.textContent.trim();
+    if (!name || /^(Results|Search results)$/i.test(name)) return null;
 
-    // Name (usually h1)
-    const name = txt('h1') || txt('h1.DUwDvf') || txt('[role="main"] h1');
-
-    // Rating
-    const rating = txt('div.F7nice span[aria-hidden="true"]') ||
-                   txt('span[aria-label*="star" i]') ||
-                   "";
-
-    // Reviews count
-    let reviews = "";
-    const revEl = panel.querySelector('button[aria-label*="review" i]') ||
-                  panel.querySelector('span[aria-label*="review" i]');
-    if (revEl) {
-      const m = (revEl.getAttribute("aria-label") || revEl.textContent).match(/([\d,]+)/);
-      if (m) reviews = m[1].replace(/,/g, "");
-    }
-
-    // Category (usually a button right under the name)
-    const category = txt('button[jsaction*="category" i]') ||
-                     txt('.DkEaL') ||
-                     txt('button.DkEaL') ||
-                     "";
-
-    // Address — buttons with data-item-id starting with 'address'
-    const address = (
-      attr('button[data-item-id="address"]', 'aria-label') ||
-      attr('button[data-item-id^="address"]', 'aria-label') ||
-      txt('button[data-item-id^="address"]')
-    ).replace(/^Address:\s*/i, "").trim();
-
-    // Phone
+    // PHONE — most reliable: data-item-id="phone:tel:+8801..."
     let phone = "";
-    const phoneBtn = panel.querySelector('button[data-item-id^="phone"]') ||
-                     panel.querySelector('button[aria-label*="Phone" i]');
+    const phoneBtn = panel.querySelector('button[data-item-id^="phone:tel:"]');
     if (phoneBtn) {
-      phone = (phoneBtn.getAttribute("aria-label") || phoneBtn.textContent || "")
-        .replace(/^Phone:\s*/i, "")
+      phone = (phoneBtn.getAttribute("data-item-id") || "")
+        .replace(/^phone:tel:/, "")
         .trim();
+    }
+    if (!phone) {
+      const altBtn = panel.querySelector('button[aria-label^="Phone:" i]');
+      if (altBtn) {
+        const m = (altBtn.getAttribute("aria-label") || "").match(/Phone:\s*([\+\d\s\-()]+)/i);
+        if (m) phone = m[1].trim();
+      }
     }
     if (!phone) {
       const tel = panel.querySelector('a[href^="tel:"]');
       if (tel) phone = tel.getAttribute("href").replace(/^tel:/, "");
     }
 
-    // Website
-    let website = "";
-    const webA = panel.querySelector('a[data-item-id="authority"]') ||
-                 panel.querySelector('a[aria-label*="Website" i]') ||
-                 panel.querySelector('a[data-item-id^="authority"]');
-    if (webA) {
-      website = webA.getAttribute("href") || "";
-      const lbl = webA.getAttribute("aria-label") || "";
-      // The aria-label sometimes is "Website: example.com"
-      if (!website && lbl) website = lbl.replace(/^Website:\s*/i, "").trim();
+    // ADDRESS
+    let address = "";
+    const addrBtn = panel.querySelector('button[data-item-id="address"]');
+    if (addrBtn) {
+      const aria = addrBtn.getAttribute("aria-label") || "";
+      if (/^Address:/i.test(aria)) {
+        address = aria.replace(/^Address:\s*/i, "").trim();
+      } else {
+        address = (addrBtn.textContent || "").replace(/\s+/g, " ").trim();
+      }
     }
 
-    // Plus code
-    const plusCode = (
-      attr('button[data-item-id^="oloc"]', 'aria-label') ||
-      txt('button[data-item-id^="oloc"]')
-    ).replace(/^Plus code:\s*/i, "").trim();
+    // WEBSITE
+    let website = "";
+    const webA = panel.querySelector('a[data-item-id="authority"]');
+    if (webA) {
+      website = webA.getAttribute("href") || "";
+      if (!website || /google\.com/.test(website)) {
+        const aria = webA.getAttribute("aria-label") || "";
+        const m = aria.match(/Website:\s*(.+)/i);
+        if (m) website = m[1].trim();
+      }
+    }
 
-    // Hours
+    // RATING
+    let rating = "";
+    const rEl = panel.querySelector('div.F7nice span[aria-hidden="true"]');
+    if (rEl) rating = rEl.textContent.trim();
+    if (!rating) {
+      const r2 = panel.querySelector('[role="img"][aria-label*="star" i]');
+      if (r2) {
+        const m = (r2.getAttribute("aria-label") || "").match(/([0-9.,]+)\s*star/i);
+        if (m) rating = m[1];
+      }
+    }
+
+    // REVIEWS
+    let reviews = "";
+    const revEl = panel.querySelector('button[aria-label*="review" i]') ||
+                  panel.querySelector('span[aria-label*="review" i]') ||
+                  panel.querySelector('div.F7nice span:not([aria-hidden])');
+    if (revEl) {
+      const m = (revEl.getAttribute("aria-label") || revEl.textContent || "").match(/([0-9,]+)/);
+      if (m) reviews = m[1].replace(/,/g, "");
+    }
+
+    // CATEGORY
+    let category = "";
+    const catBtn = panel.querySelector('button[jsaction*="category" i]');
+    if (catBtn) category = catBtn.textContent.trim();
+
+    // PLUS CODE
+    let plusCode = "";
+    const plusBtn = panel.querySelector('button[data-item-id^="oloc"]');
+    if (plusBtn) {
+      const aria = plusBtn.getAttribute("aria-label") || "";
+      plusCode = aria.replace(/^Plus code:\s*/i, "").trim() ||
+                 (plusBtn.textContent || "").trim();
+    }
+
+    // HOURS
     let hours = "";
-    const hoursBtn = panel.querySelector('div[aria-label*="Hours" i]') ||
-                     panel.querySelector('button[aria-label*="Hours" i]');
-    if (hoursBtn) {
-      hours = (hoursBtn.getAttribute("aria-label") || "")
+    const hoursEl = panel.querySelector('div[aria-label*="Hours" i]') ||
+                    panel.querySelector('button[aria-label*="Hours" i]');
+    if (hoursEl) {
+      hours = (hoursEl.getAttribute("aria-label") || "")
         .replace(/^Hours,?\s*/i, "")
         .replace(/Hide open hours.*$/i, "")
         .trim();
     }
 
-    // Google Maps URL — use the current URL, since the panel is the open place
-    const googleMapsUrl = location.href;
-
-    if (!name) return null;
     return {
       name, phone, website, address, rating, reviews,
-      category, plusCode, hours, googleMapsUrl
+      category, plusCode, hours,
+      googleMapsUrl: location.href
     };
   }
 
-  // ---------- Process a single result card ----------
+  // ---------- Navigation ----------
+  function navigateToSearch(query) {
+    const target = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+    if (location.href.split("?")[0] !== target.split("?")[0]) {
+      location.href = target;
+      return false;
+    }
+    return true;
+  }
+
+  async function waitForFeed(timeoutMs = 15000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      if (shouldStop()) return false;
+      const cards = getPlaceCards();
+      if (cards.length > 0) return true;
+      await sleep(400);
+    }
+    return false;
+  }
+
+  async function scrollFeed(maxScrolls) {
+    const feed = getFeed();
+    if (!feed) return 0;
+
+    let last = 0, stagnant = 0;
+    for (let i = 0; i < maxScrolls; i++) {
+      if (shouldStop()) break;
+      await waitWhilePaused();
+      feed.scrollTop = feed.scrollHeight;
+      await sleep(rand(900, 1400));
+      const cards = getPlaceCards();
+      const tail = (feed.textContent || "").slice(-200);
+      if (/end of the list|end of results/i.test(tail)) {
+        await pushLog(`Reached end of list (${cards.length} cards)`);
+        return cards.length;
+      }
+      if (cards.length === last) {
+        stagnant++;
+        if (stagnant >= 3) {
+          await pushLog(`No more results (${cards.length} cards)`);
+          return cards.length;
+        }
+      } else {
+        stagnant = 0;
+        last = cards.length;
+      }
+    }
+    return getPlaceCards().length;
+  }
+
+  // Click and wait for /maps/place/ to load + h1 to populate
+  async function clickAndAwaitPlace(card, timeoutMs) {
+    const before = location.href;
+    try { card.scrollIntoView({ block: "center" }); } catch (_) {}
+    await sleep(rand(250, 500));
+    card.click();
+
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      if (shouldStop()) return false;
+      if (isPlacePage() && location.href !== before) break;
+      await sleep(200);
+    }
+    if (!isPlacePage()) return false;
+
+    const t1 = Date.now();
+    while (Date.now() - t1 < 8000) {
+      if (shouldStop()) return false;
+      const panel = getMainPanel();
+      if (panel) {
+        const h1 = panel.querySelector('h1');
+        if (h1) {
+          const txt = h1.textContent.trim();
+          if (txt && txt.length > 1 && !/^(Results|Search results)$/i.test(txt)) {
+            await sleep(rand(800, 1300));
+            return true;
+          }
+        }
+      }
+      await sleep(200);
+    }
+    return false;
+  }
+
   async function processCard(card, idx, total, ctx) {
     if (shouldStop()) return;
     await waitWhilePaused();
 
-    // Get the place URL (used as primary dedup key)
     const placeUrl = card.href || "";
     if (placeUrl && RT.seenUrls.has(placeUrl)) return;
 
-    // Click to open the detail panel
-    try {
-      card.scrollIntoView({ block: "center", behavior: "instant" });
-    } catch (_) {}
-    await sleep(rand(300, 600));
-    card.click();
-
-    // Wait for the panel to populate (h1 text appears)
     const waitMs = (ctx.profileWaitSec || 5) * 1000;
-    const t0 = Date.now();
-    while (Date.now() - t0 < waitMs) {
-      if (shouldStop()) return;
-      const panel = getDetailPanel();
-      if (panel && panel.querySelector('h1') && panel.querySelector('h1').textContent.trim()) break;
-      await sleep(250);
-    }
-    // Extra small wait so phone/address fully render
-    await sleep(rand(400, 900));
-
-    const data = extractFromDetailPanel();
-    if (!data) {
-      await pushLog(`Skip ${idx + 1}/${total}: no data`);
+    const ok = await clickAndAwaitPlace(card, Math.max(waitMs, 6000));
+    if (!ok) {
+      await pushLog(`✗ ${idx + 1}/${total}: place did not load`);
       return;
     }
 
-    // Dedup by name OR url
+    const data = extractPlace();
+    if (!data) {
+      await pushLog(`✗ ${idx + 1}/${total}: extraction failed`);
+      return;
+    }
+
     const key = (data.name + "|" + (data.phone || "")).toLowerCase();
-    if (RT.seenNames.has(key)) return;
-    RT.seenNames.add(key);
+    if (RT.seen.has(key)) return;
+    RT.seen.add(key);
     if (placeUrl) RT.seenUrls.add(placeUrl);
 
     const lead = {
@@ -280,122 +300,70 @@
       collectedAt: new Date().toISOString()
     };
 
-    // Persist
     const { leads = [] } = await chrome.storage.local.get(["leads"]);
     leads.push(lead);
     await chrome.storage.local.set({ leads });
     RT.collected = leads.length;
 
-    await pushLog(`+ ${data.name}${data.phone ? "  ☎ " + data.phone : ""}`);
+    const tail = data.phone ? `  ☎ ${data.phone}` :
+                 (data.address ? `  📍 ${data.address.slice(0, 40)}` : "");
+    await pushLog(`+ ${idx + 1}/${total}: ${data.name}${tail}`);
     await recountStats();
   }
 
-  // ---------- Process one keyword × location task ----------
   async function processTask(task) {
-    const { keyword, location: loc } = task;
-    const query = `${keyword} in ${loc}`;
+    const query = `${task.keyword} in ${task.location}`;
     await pushLog(`▶ Searching: ${query}`);
 
-    // Save active task in storage so we resume after page reload
-    await chrome.storage.local.set({ activeTask: task });
+    await chrome.storage.local.set({
+      gmsActive: task,
+      gmsQueue: RT.queue,
+      gmsConfig: RT.config,
+      gmsTarget: RT.target
+    });
 
-    // Navigate (may cause reload — engine resumes via auto-start)
-    const isCurrent = await navigateToSearch(query);
-    if (!isCurrent) return false; // page is reloading; will resume
+    const here = navigateToSearch(query);
+    if (!here) return false;
 
-    const ok = await waitForFeed(15000);
-    if (!ok) {
-      await pushLog(`No results for: ${query}`);
+    if (!await waitForFeed()) {
+      await pushLog(`✗ No results for: ${query}`);
       return true;
     }
 
-    await pushLog(`Loading more results (scroll)...`);
+    await pushLog(`Loading results...`);
     const total = await scrollFeed(RT.config.scrollLimit || 25);
-    await pushLog(`Found ${total} listings. Visiting each...`);
+    if (total === 0) {
+      await pushLog(`✗ Empty feed`);
+      return true;
+    }
 
-    const cards = getResultCards();
+    await pushLog(`Found ${total} cards. Visiting each...`);
+    const cards = getPlaceCards();
     const max = Math.min(cards.length, RT.config.maxPerSearch || 50);
+
     for (let i = 0; i < max; i++) {
       if (shouldStop()) break;
       if (RT.collected >= RT.target) break;
       await waitWhilePaused();
       await processCard(cards[i], i, max, {
-        keyword, location: loc,
+        keyword: task.keyword,
+        location: task.location,
         profileWaitSec: RT.config.profileWaitSec
       });
-      await sleep(rand(200, 500));
+      await sleep(rand(250, 500));
     }
     return true;
   }
 
-  // ---------- Main loop ----------
   async function runEngine() {
     RT.status = "running";
     await saveState({ status: "running", target: RT.target, logs: [] });
-    await pushLog(`Campaign started — target ${RT.target} leads, ${RT.queue.length} tasks queued`);
+    await pushLog(`Campaign started — target ${RT.target}, ${RT.queue.length} tasks`);
 
     while (RT.queue.length && !shouldStop() && RT.collected < RT.target) {
       await waitWhilePaused();
       const task = RT.queue.shift();
-      RT.currentTask = task;
-      await chrome.storage.local.set({
-        gmsQueue: RT.queue,
-        gmsActive: task,
-        gmsConfig: RT.config,
-        gmsTarget: RT.target
-      });
-      await recountStats();
-      const finished = await processTask(task);
-      if (!finished) return; // page reloading
-    }
-
-    RT.status = shouldStop() ? "stopped" : "idle";
-    await saveState({ status: RT.status });
-    await pushLog(RT.collected >= RT.target
-      ? `✓ Target reached (${RT.collected} leads)`
-      : (shouldStop() ? `■ Stopped (${RT.collected} leads)` : `✓ Done (${RT.collected} leads)`));
-
-    // Cleanup persistent run state
-    await chrome.storage.local.remove(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget", "activeTask"]);
-  }
-
-  // ---------- Resume after page navigation ----------
-  async function tryResume() {
-    const { gmsQueue, gmsActive, gmsConfig, gmsTarget, leads = [] } =
-      await chrome.storage.local.get(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget", "leads"]);
-    if (!gmsActive || !gmsConfig) return;
-
-    // Restore runtime
-    RT.config = gmsConfig;
-    RT.queue = gmsQueue || [];
-    RT.target = gmsTarget || 100;
-    RT.collected = leads.length;
-    RT.seenNames = new Set(leads.map(l => (l.name + "|" + (l.phone || "")).toLowerCase()));
-    RT.status = "running";
-    await pushLog(`Resuming after navigation: ${gmsActive.keyword} in ${gmsActive.location}`);
-
-    // We just navigated to this search; continue from there
-    const ok = await waitForFeed(15000);
-    if (ok) {
-      await scrollFeed(RT.config.scrollLimit || 25);
-      const cards = getResultCards();
-      const max = Math.min(cards.length, RT.config.maxPerSearch || 50);
-      for (let i = 0; i < max; i++) {
-        if (shouldStop()) break;
-        if (RT.collected >= RT.target) break;
-        await waitWhilePaused();
-        await processCard(cards[i], i, max, {
-          keyword: gmsActive.keyword, location: gmsActive.location,
-          profileWaitSec: RT.config.profileWaitSec
-        });
-        await sleep(rand(200, 500));
-      }
-    }
-
-    // Continue with remaining queue
-    while (RT.queue.length && !shouldStop() && RT.collected < RT.target) {
-      const task = RT.queue.shift();
-      await chrome.storage.local.set({ gmsQueue: RT.queue, gmsActive: task });
+      await chrome.storage.local.set({ gmsQueue: RT.queue });
       await recountStats();
       const finished = await processTask(task);
       if (!finished) return;
@@ -403,11 +371,59 @@
 
     RT.status = shouldStop() ? "stopped" : "idle";
     await saveState({ status: RT.status });
-    await pushLog(`✓ Done (${RT.collected} leads)`);
+    await pushLog(RT.collected >= RT.target
+      ? `✓ Target reached (${RT.collected})`
+      : (shouldStop() ? `■ Stopped at ${RT.collected}` : `✓ Done (${RT.collected})`));
     await chrome.storage.local.remove(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget"]);
   }
 
-  // ---------- Message router ----------
+  async function tryResume() {
+    const { gmsQueue, gmsActive, gmsConfig, gmsTarget, leads = [] } =
+      await chrome.storage.local.get(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget", "leads"]);
+    if (!gmsActive || !gmsConfig) return;
+
+    RT.config = gmsConfig;
+    RT.queue = gmsQueue || [];
+    RT.target = gmsTarget || 100;
+    RT.collected = leads.length;
+    RT.seen = new Set(leads.map(l => (l.name + "|" + (l.phone || "")).toLowerCase()));
+    RT.seenUrls = new Set();
+    RT.status = "running";
+    await pushLog(`Resuming: ${gmsActive.keyword} in ${gmsActive.location}`);
+
+    if (!await waitForFeed()) {
+      await pushLog(`✗ No feed after resume`);
+    } else {
+      await scrollFeed(RT.config.scrollLimit || 25);
+      const cards = getPlaceCards();
+      const max = Math.min(cards.length, RT.config.maxPerSearch || 50);
+      for (let i = 0; i < max; i++) {
+        if (shouldStop()) break;
+        if (RT.collected >= RT.target) break;
+        await waitWhilePaused();
+        await processCard(cards[i], i, max, {
+          keyword: gmsActive.keyword,
+          location: gmsActive.location,
+          profileWaitSec: RT.config.profileWaitSec
+        });
+        await sleep(rand(250, 500));
+      }
+    }
+
+    while (RT.queue.length && !shouldStop() && RT.collected < RT.target) {
+      const task = RT.queue.shift();
+      await chrome.storage.local.set({ gmsQueue: RT.queue });
+      await recountStats();
+      const finished = await processTask(task);
+      if (!finished) return;
+    }
+
+    RT.status = shouldStop() ? "stopped" : "idle";
+    await saveState({ status: RT.status });
+    await pushLog(`✓ Done (${RT.collected})`);
+    await chrome.storage.local.remove(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget"]);
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       try {
@@ -421,14 +437,12 @@
               RT.queue.push({ keyword: k, location: l });
             }
           }
-          // Reset previous session leads? No, keep them; user can Clear manually.
           const { leads = [] } = await chrome.storage.local.get(["leads"]);
           RT.collected = leads.length;
-          RT.seenNames = new Set(leads.map(l => (l.name + "|" + (l.phone || "")).toLowerCase()));
+          RT.seen = new Set(leads.map(l => (l.name + "|" + (l.phone || "")).toLowerCase()));
           RT.seenUrls = new Set();
-          RT.abortFlag = false;
+          RT.abort = false;
           sendResponse({ ok: true });
-          // Fire and forget
           runEngine();
         } else if (msg.type === "PAUSE") {
           if (RT.status === "running") {
@@ -446,9 +460,9 @@
           sendResponse({ ok: true });
         } else if (msg.type === "STOP") {
           RT.status = "stopped";
-          RT.abortFlag = true;
+          RT.abort = true;
           await saveState({ status: "stopped" });
-          await pushLog("■ Stopped by user");
+          await pushLog("■ Stopped");
           await chrome.storage.local.remove(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget"]);
           sendResponse({ ok: true });
         } else if (msg.type === "PING") {
@@ -463,9 +477,8 @@
     return true;
   });
 
-  // ---------- Auto-resume on page load ----------
   (async () => {
-    await sleep(800); // let Maps boot up
+    await sleep(800);
     await tryResume();
   })();
 })();
