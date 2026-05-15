@@ -25,6 +25,21 @@
       <span><b id="progFound">0</b> leads</span>
     </div>
     <div class="progress-current" id="progCurrent"></div>
+    <!-- Anti-block delay indicator -->
+    <div class="delay-info" id="delayInfo" style="display:none;">
+      <span class="delay-badge">Delay ×<span id="delayMultiplier">1.0</span></span>
+    </div>
+  </section>
+
+  <!-- FEATURE 3: Live Preview Panel -->
+  <section class="preview-panel" id="previewPanel">
+    <div class="preview-header">
+      <span>Last 5 Leads</span>
+      <button class="refresh-btn" id="refreshPreview" title="Refresh">&#8635;</button>
+    </div>
+    <div class="preview-list" id="previewList">
+      <div class="preview-empty">No leads yet. Start scraping!</div>
+    </div>
   </section>
 
   <section class="controls">
@@ -65,13 +80,15 @@
 
     <hr />
 
-    <button id="runDeep" class="secondary">Deep-scrape saved leads (find more emails/phones)</button>
+    <button id="runDeep" class="secondary">Deep-scrape saved leads (find emails/phones)</button>
+    <button id="enrichEmails" class="secondary enrich-btn">&#9993; Email Enrichment (visit websites)</button>
 
     <hr />
 
     <div class="actions">
       <button id="exportCsv" class="secondary">Export CSV</button>
       <button id="exportJson" class="secondary">Export JSON</button>
+      <button id="recalcScores" class="secondary score-btn">Recalc Scores</button>
       <button id="clear" class="danger">Clear all</button>
     </div>
   </section>

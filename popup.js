@@ -1,4 +1,4 @@
-// popup.js — UI controller
+// popup.js — UI controller with live preview, quality scores, and delay info
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -50,7 +50,50 @@ async function getActiveTab() {
   return tab;
 }
 
-// ----- Progress UI -----
+// ===== FEATURE 3: Live Preview Panel =====
+function getScoreColor(score) {
+  if (score >= 70) return "#34a853";
+  if (score >= 40) return "#f9ab00";
+  return "#ea4335";
+}
+
+function getScoreLabel(score) {
+  if (score >= 70) return "High";
+  if (score >= 40) return "Medium";
+  return "Low";
+}
+
+function renderPreview(previewData) {
+  const list = $("previewList");
+  if (!previewData || previewData.length === 0) {
+    list.innerHTML = '<div class="preview-empty">No leads yet. Start scraping!</div>';
+    return;
+  }
+
+  list.innerHTML = previewData.map((lead, i) => `
+    <div class="preview-item">
+      <div class="preview-item-header">
+        <span class="preview-title" title="${lead.title}">${lead.title || "Untitled"}</span>
+        <span class="quality-badge" style="background:${getScoreColor(lead.qualityScore)}">
+          ${lead.qualityScore}
+        </span>
+      </div>
+      <div class="preview-domain">${lead.domain || "—"}</div>
+      <div class="preview-contacts">
+        ${lead.emails.length ? `<span class="preview-email">✉ ${lead.emails[0]}</span>` : ""}
+        ${lead.phones.length ? `<span class="preview-phone">☎ ${lead.phones[0]}</span>` : ""}
+        ${!lead.emails.length && !lead.phones.length ? '<span class="preview-none">No contacts yet</span>' : ""}
+      </div>
+    </div>
+  `).join("");
+}
+
+async function loadPreview() {
+  const { livePreview = [] } = await chrome.storage.local.get(["livePreview"]);
+  renderPreview(livePreview);
+}
+
+// ===== Progress UI =====
 function renderProgress(p) {
   const box = $("progressBox");
   if (!p || !p.isRunning) {
@@ -68,6 +111,15 @@ function renderProgress(p) {
     ? Math.min(100, Math.round((p.currentPage / p.totalPages) * 100))
     : (p.percent || 0);
   $("progressFill").style.width = pct + "%";
+
+  // Show delay info
+  const delayEl = $("delayInfo");
+  if (p.delayInfo) {
+    delayEl.style.display = "block";
+    $("delayMultiplier").textContent = p.delayInfo.multiplier || "1.0";
+  } else {
+    delayEl.style.display = "none";
+  }
 }
 
 async function pollProgress() {
@@ -81,9 +133,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.progress) renderProgress(changes.progress.newValue);
   if (changes.leads) refreshCount();
+  if (changes.livePreview) renderPreview(changes.livePreview.newValue);
 });
 
-// ----- Buttons -----
+// ===== Buttons =====
 $("scrapeNow").addEventListener("click", async () => {
   const tab = await getActiveTab();
   if (!tab || !/^https?:\/\/(www\.)?google\.com\/search/.test(tab.url || "")) {
@@ -102,6 +155,7 @@ $("scrapeNow").addEventListener("click", async () => {
     setStatus("Could not reach page. Reload the Google search tab.");
   }
   refreshCount();
+  loadPreview();
 });
 
 $("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
@@ -123,6 +177,37 @@ $("runDeep").addEventListener("click", async () => {
     setStatus(`Deep-scrape failed: ${res ? res.error : "unknown error"}`);
   }
   refreshCount();
+  loadPreview();
+});
+
+// FEATURE 2: Email enrichment button
+$("enrichEmails").addEventListener("click", async () => {
+  setStatus("Starting email enrichment... visiting websites...");
+  const res = await chrome.runtime.sendMessage({ type: "ENRICH_EMAILS" });
+  if (res && res.ok) {
+    setStatus(`Email enrichment done. ${res.updated} leads enriched (${res.totalEmails || 0} emails found).`);
+  } else {
+    setStatus(`Enrichment failed: ${res ? (res.message || res.error) : "unknown error"}`);
+  }
+  refreshCount();
+  loadPreview();
+});
+
+// FEATURE 4: Recalculate scores
+$("recalcScores").addEventListener("click", async () => {
+  setStatus("Recalculating quality scores...");
+  const res = await chrome.runtime.sendMessage({ type: "RECALC_SCORES" });
+  if (res && res.ok) {
+    setStatus(`Scores updated for ${res.count} leads.`);
+  } else {
+    setStatus("Failed to recalculate scores.");
+  }
+  loadPreview();
+});
+
+// FEATURE 3: Refresh preview
+$("refreshPreview").addEventListener("click", () => {
+  loadPreview();
 });
 
 $("exportCsv").addEventListener("click", async () => {
@@ -137,12 +222,14 @@ $("exportJson").addEventListener("click", async () => {
 
 $("clear").addEventListener("click", async () => {
   if (!confirm("Delete all saved leads?")) return;
-  await chrome.storage.local.set({ leads: [] });
+  await chrome.storage.local.set({ leads: [], livePreview: [] });
   setStatus("All leads cleared.");
   refreshCount();
+  loadPreview();
 });
 
 // init
 loadSettings();
 refreshCount();
 pollProgress();
+loadPreview();
