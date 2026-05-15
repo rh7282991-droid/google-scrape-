@@ -277,6 +277,57 @@ button:active { transform: translateY(1px); }
 .enrich-btn { background: #e6f4ea; color: #137333; font-weight: 600; }
 .enrich-btn:hover { filter: brightness(0.92); }
 .score-btn { background: #fef7e0; color: #ea8600; }
+
+/* Feature sections */
+.feature-section {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.feature-section summary {
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: #5f6368;
+  padding: 8px 10px;
+  outline: none;
+}
+.feature-section summary:hover {
+  background: #eee;
+}
+.section-body {
+  padding: 8px 10px;
+  border-top: 1px solid #e0e0e0;
+}
+.section-body .hint {
+  font-size: 10px;
+  color: #9aa0a6;
+  margin: 6px 0 0;
+}
+
+/* Maps buttons */
+.maps-section summary { color: #34a853; }
+.maps-btn { background: #e6f4ea; color: #137333; }
+.maps-btn:hover { filter: brightness(0.92); }
+
+/* Social media button */
+.social-btn { background: #e8f0fe; color: #1a73e8; font-weight: 600; }
+.social-btn:hover { filter: brightness(0.92); }
+
+/* Reviews button */
+.reviews-btn { background: #fef7e0; color: #ea8600; font-weight: 600; }
+.reviews-btn:hover { filter: brightness(0.92); }
+
+/* Hours button */
+.hours-btn { background: #f3e8fd; color: #7627bb; font-weight: 600; }
+.hours-btn:hover { filter: brightness(0.92); }
+
+/* Fuse button */
+.fuse-btn { background: #fce8e6; color: #c5221f; font-weight: 600; }
+.fuse-btn:hover { filter: brightness(0.92); }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .actions button { margin: 0; grid-column: span 1; }
 .actions .danger { grid-column: span 2; }

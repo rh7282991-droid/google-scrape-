@@ -210,6 +210,102 @@ $("refreshPreview").addEventListener("click", () => {
   loadPreview();
 });
 
+// ===== Google Maps Scraping =====
+$("scrapeMaps").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (!tab || !/google\.com\/maps/.test(tab.url || "")) {
+    setStatus("Please open Google Maps with a search first.");
+    return;
+  }
+  setStatus("Scraping Maps results...");
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_MAPS_LIST", maxScrolls: 8 });
+    if (res && res.ok) {
+      setStatus(`Maps: Found ${res.found} businesses, ${res.added} new saved.`);
+    } else {
+      setStatus("No response from Maps page. Try reloading.");
+    }
+  } catch (e) {
+    setStatus("Could not reach Maps page. Reload the tab.");
+  }
+  refreshCount();
+  loadPreview();
+});
+
+$("scrapeMapsBiz").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (!tab || !/google\.com\/maps/.test(tab.url || "")) {
+    setStatus("Please open a Google Maps business page first.");
+    return;
+  }
+  setStatus("Scraping business detail...");
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_MAPS_DETAIL" });
+    if (res && res.ok) {
+      const d = res.detail || {};
+      setStatus(`Scraped: ${d.title || "Business"} (${(d.phones || []).length} phones, ${(d.emails || []).length} emails)`);
+    } else {
+      setStatus("No response. Make sure a business panel is open.");
+    }
+  } catch (e) {
+    setStatus("Could not reach Maps page. Reload the tab.");
+  }
+  refreshCount();
+  loadPreview();
+});
+
+// ===== Social Media Detection =====
+$("detectSocial").addEventListener("click", async () => {
+  setStatus("Detecting social media profiles... (visiting websites)");
+  const res = await chrome.runtime.sendMessage({ type: "DETECT_SOCIAL" });
+  if (res && res.ok) {
+    setStatus(`Social detection done. ${res.updated} leads enriched (${res.totalProfiles || 0} profiles found).`);
+  } else {
+    setStatus(`Social detection: ${res ? (res.message || res.error) : "failed"}`);
+  }
+  refreshCount();
+  loadPreview();
+});
+
+// ===== Reviews Scraping =====
+$("scrapeReviews").addEventListener("click", async () => {
+  setStatus("Scraping reviews from websites...");
+  const res = await chrome.runtime.sendMessage({ type: "SCRAPE_REVIEWS" });
+  if (res && res.ok) {
+    setStatus(`Reviews done. ${res.updated} leads got review data.`);
+  } else {
+    setStatus(`Reviews: ${res ? (res.message || res.error) : "failed"}`);
+  }
+  refreshCount();
+  loadPreview();
+});
+
+// ===== Opening Hours =====
+$("scrapeHours").addEventListener("click", async () => {
+  setStatus("Scraping opening hours from websites...");
+  const res = await chrome.runtime.sendMessage({ type: "SCRAPE_HOURS" });
+  if (res && res.ok) {
+    setStatus(`Hours done. ${res.updated} leads got opening hours.`);
+  } else {
+    setStatus(`Hours: ${res ? (res.message || res.error) : "failed"}`);
+  }
+  refreshCount();
+  loadPreview();
+});
+
+// ===== Multi-Source Data Fusion =====
+$("fuseData").addEventListener("click", async () => {
+  setStatus("Fusing multi-source data...");
+  const res = await chrome.runtime.sendMessage({ type: "FUSE_DATA" });
+  if (res && res.ok) {
+    setStatus(`Data fusion done. ${res.merged} leads enriched across ${res.totalDomains} domains.`);
+  } else {
+    setStatus(`Fusion: ${res ? (res.message || res.error) : "failed"}`);
+  }
+  refreshCount();
+  loadPreview();
+});
+
 $("exportCsv").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "EXPORT_CSV" });
   setStatus(res && res.ok ? "CSV exported to Downloads." : "Nothing to export.");

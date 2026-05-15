@@ -39,6 +39,15 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.google.com/maps*",
+        "https://google.com/maps*",
+        "https://maps.google.com/*"
+      ],
+      "js": ["content-maps.js"],
+      "run_at": "document_idle"
     }
   ]
 }

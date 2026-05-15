@@ -1,8 +1,16 @@
 // background.js — service worker
-// Handles: CSV/JSON export, deep-scrape with live progress, email enrichment, lead quality scoring
+// Handles: CSV/JSON export, deep-scrape, email enrichment, lead quality scoring,
+// multi-source data fusion, social media detection, reviews scraping, opening hours
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+const SOCIAL_RE = {
+  facebook: /https?:\/\/(www\.)?facebook\.com\/[a-zA-Z0-9._%-]+/gi,
+  instagram: /https?:\/\/(www\.)?instagram\.com\/[a-zA-Z0-9._%-]+/gi,
+  linkedin: /https?:\/\/(www\.)?linkedin\.com\/(company|in)\/[a-zA-Z0-9._%-]+/gi,
+  twitter: /https?:\/\/(www\.)?(twitter|x)\.com\/[a-zA-Z0-9._%-]+/gi,
+  youtube: /https?:\/\/(www\.)?youtube\.com\/(channel|c|@)[\/a-zA-Z0-9._%-]+/gi
+};
 
 // ===== FEATURE 1: Smart Random Delay for Anti-Block =====
 const SmartDelay = {
@@ -127,7 +135,10 @@ function leadsToCsv(leads) {
   const keys = new Set();
   leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
   const preferred = ["title", "url", "domain", "description", "emails", "phones",
-                     "qualityScore", "position", "query", "scrapedAt", "deepScrapedAt", "enrichedAt"];
+                     "qualityScore", "category", "address", "rating", "totalReviews",
+                     "socialLinks", "openingHours", "position", "query", "source",
+                     "scrapedAt", "deepScrapedAt", "enrichedAt", "fusedAt", "socialDetectedAt",
+                     "reviewsScrapedAt", "hoursScrapedAt"];
   const headers = preferred.filter(k => keys.has(k))
     .concat([...keys].filter(k => !preferred.includes(k)));
 
@@ -136,6 +147,7 @@ function leadsToCsv(leads) {
     rows.push(headers.map(h => {
       const v = l[h];
       if (Array.isArray(v)) return csvEscape(v.join("; "));
+      if (v && typeof v === "object") return csvEscape(JSON.stringify(v));
       return csvEscape(v);
     }).join(","));
   }
@@ -434,6 +446,400 @@ async function recalculateScores() {
   return { ok: true, count: leads.length };
 }
 
+// ===== FEATURE 8: Multi-Source Data Fusion =====
+// Merges data from Google Maps, Google Search, and website enrichment
+// If one source has phone but not email, another source fills it in
+async function fuseMultiSourceData() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) return { ok: false, error: "No leads saved" };
+
+  let mergeCount = 0;
+  const domainMap = {};
+
+  // Group leads by domain for fusion
+  for (let i = 0; i < leads.length; i++) {
+    const domain = leads[i].domain || "";
+    if (!domain) continue;
+    if (!domainMap[domain]) domainMap[domain] = [];
+    domainMap[domain].push(i);
+  }
+
+  // Fuse data for leads with same domain
+  for (const [domain, indices] of Object.entries(domainMap)) {
+    if (indices.length < 2) continue;
+
+    // Collect all data across sources for this domain
+    const allEmails = new Set();
+    const allPhones = new Set();
+    const allSocials = {};
+    let bestTitle = "";
+    let bestDescription = "";
+    let bestAddress = "";
+    let bestRating = null;
+    let bestReviews = null;
+    let bestHours = null;
+    let bestCategory = "";
+
+    for (const idx of indices) {
+      const lead = leads[idx];
+      (lead.emails || []).forEach(e => allEmails.add(e));
+      (lead.phones || []).forEach(p => allPhones.add(p));
+      if (lead.phone) allPhones.add(lead.phone);
+
+      // Merge social links
+      if (lead.socialLinks) {
+        for (const [platform, url] of Object.entries(lead.socialLinks)) {
+          if (url && !allSocials[platform]) allSocials[platform] = url;
+        }
+      }
+
+      // Best title (longest usually most descriptive)
+      if ((lead.title || "").length > bestTitle.length) bestTitle = lead.title;
+      if ((lead.description || "").length > bestDescription.length) bestDescription = lead.description;
+      if ((lead.address || "").length > bestAddress.length) bestAddress = lead.address;
+      if (lead.rating && (!bestRating || lead.rating > bestRating)) bestRating = lead.rating;
+      if (lead.reviews && lead.reviews.topReviews && lead.reviews.topReviews.length > 0) bestReviews = lead.reviews;
+      if (lead.openingHours && Object.keys(lead.openingHours).length > 0) bestHours = lead.openingHours;
+      if ((lead.category || "").length > bestCategory.length) bestCategory = lead.category;
+    }
+
+    // Apply fused data back to all leads with this domain
+    for (const idx of indices) {
+      const lead = leads[idx];
+      const oldEmailCount = (lead.emails || []).length;
+      const oldPhoneCount = (lead.phones || []).length;
+
+      lead.emails = [...allEmails];
+      lead.phones = [...allPhones];
+      if (Object.keys(allSocials).length > 0) lead.socialLinks = { ...(lead.socialLinks || {}), ...allSocials };
+      if (!lead.address && bestAddress) lead.address = bestAddress;
+      if (!lead.rating && bestRating) lead.rating = bestRating;
+      if (!lead.reviews && bestReviews) lead.reviews = bestReviews;
+      if (!lead.openingHours && bestHours) lead.openingHours = bestHours;
+      if (!lead.category && bestCategory) lead.category = bestCategory;
+
+      lead.fusedAt = new Date().toISOString();
+      lead.qualityScore = calculateLeadQuality(lead);
+
+      if (lead.emails.length > oldEmailCount || lead.phones.length > oldPhoneCount) {
+        mergeCount++;
+      }
+    }
+  }
+
+  await chrome.storage.local.set({ leads });
+  await updateLivePreview();
+  return { ok: true, merged: mergeCount, totalDomains: Object.keys(domainMap).length };
+}
+
+// ===== FEATURE 10: Social Media Detection =====
+// Visit business websites to find Facebook, Instagram, LinkedIn URLs
+function extractSocialLinksFromHtml(html) {
+  const socials = {};
+  for (const [platform, regex] of Object.entries(SOCIAL_RE)) {
+    const matches = html.match(regex);
+    if (matches && matches.length > 0) {
+      const unique = [...new Set(matches.map(u => u.replace(/\/+$/, "")))];
+      // Filter out generic/login pages
+      const filtered = unique.filter(u =>
+        !/(\/login|\/share|\/sharer|\/intent|\/dialog)/i.test(u)
+      );
+      if (filtered.length > 0) socials[platform] = filtered[0];
+      else if (unique.length > 0) socials[platform] = unique[0];
+    }
+  }
+  return socials;
+}
+
+async function detectSocialMedia() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) return { ok: false, error: "No leads saved" };
+
+  SmartDelay.reset();
+
+  // Filter leads that have a website but no social links
+  const needsSocial = leads.filter(l =>
+    (l.url || l.website) && (!l.socialLinks || Object.keys(l.socialLinks).length === 0)
+  );
+
+  if (!needsSocial.length) {
+    return { ok: true, updated: 0, message: "All leads already have social profiles detected" };
+  }
+
+  await setProgress({
+    isRunning: true,
+    title: "Detecting social media...",
+    currentPage: 0,
+    totalPages: needsSocial.length,
+    totalFound: 0,
+    currentItem: "Starting social media scan..."
+  });
+
+  let enriched = 0;
+  let totalProfiles = 0;
+
+  for (let i = 0; i < needsSocial.length; i++) {
+    const lead = needsSocial[i];
+    const leadIndex = leads.indexOf(lead);
+    const targetUrl = lead.website || lead.url;
+
+    await setProgress({
+      currentPage: i + 1,
+      currentItem: `Checking: ${lead.domain || targetUrl}`,
+      delayInfo: SmartDelay.getState()
+    });
+
+    try {
+      const html = await fetchPage(targetUrl);
+      if (!html) continue;
+
+      const socials = extractSocialLinksFromHtml(html);
+
+      if (Object.keys(socials).length > 0) {
+        lead.socialLinks = { ...(lead.socialLinks || {}), ...socials };
+        lead.socialDetectedAt = new Date().toISOString();
+        lead.qualityScore = calculateLeadQuality(lead);
+        enriched++;
+        totalProfiles += Object.keys(socials).length;
+        leads[leadIndex] = lead;
+      }
+    } catch (e) {
+      // Continue on error
+    }
+
+    await setProgress({ totalFound: totalProfiles });
+    await chrome.storage.local.set({ leads });
+    await updateLivePreview();
+
+    // Smart delay
+    const delay = SmartDelay.getDelay();
+    await setProgress({
+      currentItem: `Waiting ${(delay / 1000).toFixed(1)}s (anti-block)...`,
+      delayInfo: SmartDelay.getState()
+    });
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  await setProgress({
+    isRunning: false,
+    currentItem: `Done. ${enriched} leads got social profiles (${totalProfiles} links).`
+  });
+  await updateLivePreview();
+
+  setTimeout(async () => {
+    await chrome.storage.local.set({ progress: { isRunning: false } });
+  }, 4000);
+
+  return { ok: true, updated: enriched, totalProfiles };
+}
+
+// ===== FEATURE 11: Reviews Scraping (from website) =====
+// Extracts review-like content from business pages
+function extractReviewsFromHtml(html) {
+  const reviews = { topReviews: [] };
+
+  // Look for schema.org review data
+  const schemaMatches = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
+  if (schemaMatches) {
+    for (const match of schemaMatches) {
+      try {
+        const jsonText = match.replace(/<\/?script[^>]*>/gi, "");
+        const data = JSON.parse(jsonText);
+        if (data.aggregateRating) {
+          reviews.averageRating = parseFloat(data.aggregateRating.ratingValue) || null;
+          reviews.totalReviews = parseInt(data.aggregateRating.reviewCount || data.aggregateRating.ratingCount) || null;
+        }
+        if (data.review && Array.isArray(data.review)) {
+          for (const r of data.review.slice(0, 5)) {
+            reviews.topReviews.push({
+              author: r.author?.name || r.author || "",
+              text: (r.reviewBody || r.description || "").slice(0, 500),
+              rating: r.reviewRating?.ratingValue ? parseFloat(r.reviewRating.ratingValue) : null,
+              date: r.datePublished || ""
+            });
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  return reviews.topReviews.length > 0 || reviews.averageRating ? reviews : null;
+}
+
+async function scrapeReviews() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) return { ok: false, error: "No leads saved" };
+
+  SmartDelay.reset();
+
+  const needsReviews = leads.filter(l =>
+    (l.url || l.website) && (!l.reviews || !l.reviews.topReviews || l.reviews.topReviews.length === 0)
+  );
+
+  if (!needsReviews.length) {
+    return { ok: true, updated: 0, message: "All leads already have reviews" };
+  }
+
+  await setProgress({
+    isRunning: true,
+    title: "Scraping reviews...",
+    currentPage: 0,
+    totalPages: needsReviews.length,
+    totalFound: 0,
+    currentItem: "Starting reviews scan..."
+  });
+
+  let enriched = 0;
+
+  for (let i = 0; i < needsReviews.length; i++) {
+    const lead = needsReviews[i];
+    const leadIndex = leads.indexOf(lead);
+    const targetUrl = lead.website || lead.url;
+
+    await setProgress({
+      currentPage: i + 1,
+      currentItem: `Checking reviews: ${lead.domain || targetUrl}`
+    });
+
+    try {
+      const html = await fetchPage(targetUrl);
+      if (!html) continue;
+
+      const reviews = extractReviewsFromHtml(html);
+      if (reviews) {
+        lead.reviews = reviews;
+        lead.reviewsScrapedAt = new Date().toISOString();
+        lead.qualityScore = calculateLeadQuality(lead);
+        enriched++;
+        leads[leadIndex] = lead;
+      }
+    } catch (e) {}
+
+    await chrome.storage.local.set({ leads });
+
+    const delay = SmartDelay.getDelay();
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  await setProgress({ isRunning: false, currentItem: `Done. ${enriched} leads got reviews.` });
+  await updateLivePreview();
+
+  setTimeout(async () => {
+    await chrome.storage.local.set({ progress: { isRunning: false } });
+  }, 4000);
+
+  return { ok: true, updated: enriched };
+}
+
+// ===== FEATURE 13: Opening Hours from Google Business Profile =====
+// Attempts to find opening hours from structured data on business websites
+function extractHoursFromHtml(html) {
+  const hours = {};
+  const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+  // Try schema.org OpeningHoursSpecification
+  const schemaMatches = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
+  if (schemaMatches) {
+    for (const match of schemaMatches) {
+      try {
+        const jsonText = match.replace(/<\/?script[^>]*>/gi, "");
+        const data = JSON.parse(jsonText);
+        const specs = data.openingHoursSpecification || data.openingHours;
+        if (Array.isArray(specs)) {
+          for (const spec of specs) {
+            const days = Array.isArray(spec.dayOfWeek) ? spec.dayOfWeek : [spec.dayOfWeek];
+            for (const day of days) {
+              const dayName = typeof day === "string" ? day.replace("http://schema.org/", "").replace("https://schema.org/", "") : "";
+              if (dayName && spec.opens && spec.closes) {
+                hours[dayName] = `${spec.opens} - ${spec.closes}`;
+              }
+            }
+          }
+        } else if (typeof specs === "string") {
+          // Format: "Mo-Fr 09:00-17:00"
+          hours._raw = specs;
+        }
+      } catch (_) {}
+    }
+  }
+
+  // Try parsing from visible text patterns
+  if (Object.keys(hours).length === 0) {
+    const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ");
+    for (const day of daysOfWeek) {
+      const re = new RegExp(day + "[:\\s]+([\\d:]+\\s*(?:AM|PM|am|pm)?\\s*[-–to]+\\s*[\\d:]+\\s*(?:AM|PM|am|pm)?)", "i");
+      const m = text.match(re);
+      if (m) hours[day] = m[1].trim();
+    }
+  }
+
+  return Object.keys(hours).length > 0 ? hours : null;
+}
+
+async function scrapeOpeningHours() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) return { ok: false, error: "No leads saved" };
+
+  SmartDelay.reset();
+
+  const needsHours = leads.filter(l =>
+    (l.url || l.website) && (!l.openingHours || Object.keys(l.openingHours).length === 0)
+  );
+
+  if (!needsHours.length) {
+    return { ok: true, updated: 0, message: "All leads already have opening hours" };
+  }
+
+  await setProgress({
+    isRunning: true,
+    title: "Scraping opening hours...",
+    currentPage: 0,
+    totalPages: needsHours.length,
+    totalFound: 0,
+    currentItem: "Starting hours scan..."
+  });
+
+  let enriched = 0;
+
+  for (let i = 0; i < needsHours.length; i++) {
+    const lead = needsHours[i];
+    const leadIndex = leads.indexOf(lead);
+    const targetUrl = lead.website || lead.url;
+
+    await setProgress({
+      currentPage: i + 1,
+      currentItem: `Checking hours: ${lead.domain || targetUrl}`
+    });
+
+    try {
+      const html = await fetchPage(targetUrl);
+      if (!html) continue;
+
+      const hours = extractHoursFromHtml(html);
+      if (hours) {
+        lead.openingHours = hours;
+        lead.hoursScrapedAt = new Date().toISOString();
+        enriched++;
+        leads[leadIndex] = lead;
+      }
+    } catch (e) {}
+
+    await chrome.storage.local.set({ leads });
+
+    const delay = SmartDelay.getDelay();
+    await new Promise(r => setTimeout(r, delay));
+  }
+
+  await setProgress({ isRunning: false, currentItem: `Done. ${enriched} leads got hours.` });
+  await updateLivePreview();
+
+  setTimeout(async () => {
+    await chrome.storage.local.set({ progress: { isRunning: false } });
+  }, 4000);
+
+  return { ok: true, updated: enriched };
+}
+
 // ===== Message router =====
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -460,6 +866,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(r);
       } else if (msg.type === "RECALC_SCORES") {
         const r = await recalculateScores();
+        sendResponse(r);
+      } else if (msg.type === "FUSE_DATA") {
+        const r = await fuseMultiSourceData();
+        sendResponse(r);
+      } else if (msg.type === "DETECT_SOCIAL") {
+        const r = await detectSocialMedia();
+        sendResponse(r);
+      } else if (msg.type === "SCRAPE_REVIEWS") {
+        const r = await scrapeReviews();
+        sendResponse(r);
+      } else if (msg.type === "SCRAPE_HOURS") {
+        const r = await scrapeOpeningHours();
         sendResponse(r);
       } else if (msg.type === "GET_LIVE_PREVIEW") {
         await updateLivePreview();
