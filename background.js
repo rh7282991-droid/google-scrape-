@@ -72,24 +72,97 @@ async function closeScrapingWindow() {
 // This function is injected into each loaded page; it has full access to the rendered DOM.
 function __extractContactsInPage() {
   const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-  const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+
+  // Smart phone regexes for real phone numbers
+  const PHONE_PATTERNS = [
+    // Bangladesh: +880XXXXXXXXXX, 880-XXXX-XXXXXX, 01XXXXXXXXX
+    /(?:\+?880[\s\-.]?\d[\s\-.]?\d{4}[\s\-.]?\d{4,5})/g,
+    /(?:0?1[3-9]\d{2}[\s\-.]?\d{3}[\s\-.]?\d{3,4})/g,
+    // International: +XX (X) XXXX-XXXX or +XX XXXXXXXXXX
+    /(?:\+\d{1,3}[\s\-.]?\(?\d{1,5}\)?[\s\-.]?\d{3,4}[\s\-.]?\d{3,4}[\s\-.]?\d{0,4})/g,
+    // General: numbers near phone-related keywords (captured via context below)
+  ];
+
+  // Keywords that indicate the nearby number is a phone
+  const PHONE_KEYWORDS = /phone|mobile|call|tel|hotline|whatsapp|viber|contact|helpline|fax|cell/i;
 
   const emails = new Set();
   const phones = new Set();
 
-  // 1) mailto: and tel: links from the rendered DOM
+  // ===== PHONE: Priority 1 — tel: links (most reliable) =====
+  document.querySelectorAll('a[href^="tel:"], a[href^="Tel:"]').forEach(a => {
+    let p = a.getAttribute("href").replace(/^tel:/i, "").replace(/\s/g, "");
+    try { p = decodeURIComponent(p); } catch (_) {}
+    if (p && p.replace(/\D/g, "").length >= 8) phones.add(p);
+  });
+
+  // ===== PHONE: Priority 2 — JSON-LD telephone field =====
+  document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+    try {
+      const data = JSON.parse(s.textContent);
+      const collect = (o) => {
+        if (!o || typeof o !== "object") return;
+        if (Array.isArray(o)) { o.forEach(collect); return; }
+        if (o.email && typeof o.email === "string") emails.add(o.email.toLowerCase());
+        if (o.telephone && typeof o.telephone === "string") {
+          const t = o.telephone.trim();
+          if (t.replace(/\D/g, "").length >= 8) phones.add(t);
+        }
+        if (o.phone && typeof o.phone === "string") {
+          const t = o.phone.trim();
+          if (t.replace(/\D/g, "").length >= 8) phones.add(t);
+        }
+        Object.values(o).forEach(collect);
+      };
+      collect(data);
+    } catch (_) {}
+  });
+
+  // ===== PHONE: Priority 3 — itemprop=telephone or content with phone =====
+  document.querySelectorAll('[itemprop="telephone"]').forEach(el => {
+    const val = el.getAttribute("content") || el.textContent || "";
+    const cleaned = val.trim();
+    if (cleaned.replace(/\D/g, "").length >= 8) phones.add(cleaned);
+  });
+
+  // ===== PHONE: Priority 4 — Phone patterns in page text =====
+  const bodyText = (document.body && document.body.innerText) || "";
+
+  PHONE_PATTERNS.forEach(re => {
+    (bodyText.match(re) || []).forEach(p => {
+      const cleaned = p.trim();
+      const digits = cleaned.replace(/\D/g, "");
+      if (digits.length >= 10 && digits.length <= 15) {
+        phones.add(cleaned);
+      }
+    });
+  });
+
+  // ===== PHONE: Priority 5 — Context-aware: numbers near "phone" keywords =====
+  const lines = bodyText.split("\n");
+  lines.forEach(line => {
+    if (!PHONE_KEYWORDS.test(line)) return;
+    // Find numbers in lines that mention phone/call/mobile etc.
+    const nums = line.match(/[\+]?\d[\d\s\-().]{7,}\d/g) || [];
+    nums.forEach(n => {
+      const digits = n.replace(/\D/g, "");
+      if (digits.length >= 10 && digits.length <= 15) {
+        // Extra filter: should not look like a price or date
+        if (!/\$|USD|BDT|Tk|Taka|৳|Price|amount|year|date|order/i.test(line)) {
+          phones.add(n.trim());
+        }
+      }
+    });
+  });
+
+  // ===== EMAIL: Priority 1 — mailto: links =====
   document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
     let e = a.getAttribute("href").replace(/^mailto:/i, "").split("?")[0];
     try { e = decodeURIComponent(e); } catch (_) {}
     if (e && /@/.test(e)) emails.add(e.toLowerCase());
   });
-  document.querySelectorAll('a[href^="tel:"]').forEach(a => {
-    let p = a.getAttribute("href").replace(/^tel:/i, "");
-    try { p = decodeURIComponent(p); } catch (_) {}
-    if (p) phones.add(p);
-  });
 
-  // 2) Cloudflare-obfuscated emails
+  // ===== EMAIL: Priority 2 — Cloudflare-obfuscated =====
   document.querySelectorAll("[data-cfemail]").forEach(el => {
     const hex = el.getAttribute("data-cfemail");
     if (!hex) return;
@@ -103,36 +176,15 @@ function __extractContactsInPage() {
     } catch (_) {}
   });
 
-  // 3) JSON-LD
-  document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
-    try {
-      const data = JSON.parse(s.textContent);
-      const collect = (o) => {
-        if (!o || typeof o !== "object") return;
-        if (Array.isArray(o)) { o.forEach(collect); return; }
-        if (o.email && typeof o.email === "string") emails.add(o.email.toLowerCase());
-        if (o.telephone && typeof o.telephone === "string") phones.add(String(o.telephone));
-        Object.values(o).forEach(collect);
-      };
-      collect(data);
-    } catch (_) {}
-  });
-
-  // 4) Visible text from rendered DOM (after JS executed)
-  const bodyText = (document.body && document.body.innerText) || "";
+  // ===== EMAIL: Priority 3 — Regex from visible text =====
   (bodyText.match(EMAIL_RE) || []).forEach(e => {
     const lo = e.toLowerCase();
     if (!/\.(png|jpg|jpeg|gif|svg|webp|ico|css|js|woff2?|ttf|mp4)$/i.test(lo)) {
       emails.add(lo);
     }
   });
-  (bodyText.match(PHONE_RE) || []).forEach(p => {
-    const trimmed = p.trim();
-    const digits = trimmed.replace(/\D/g, "");
-    if (digits.length >= 8 && digits.length <= 15) phones.add(trimmed);
-  });
 
-  // 5) Deobfuscate "user [at] domain [dot] com" style
+  // ===== EMAIL: Priority 4 — Deobfuscate [at] [dot] patterns =====
   const deob = bodyText
     .replace(/\s*\[\s*at\s*\]\s*/gi, "@")
     .replace(/\s*\(\s*at\s*\)\s*/gi, "@")
@@ -144,7 +196,7 @@ function __extractContactsInPage() {
     .replace(/\s+dot\s+/gi, ".");
   (deob.match(EMAIL_RE) || []).forEach(e => emails.add(e.toLowerCase()));
 
-  // 6) Also scan raw HTML for stuff hidden in attributes
+  // ===== EMAIL: Priority 5 — Raw HTML (hidden attributes) =====
   try {
     const html = document.documentElement.outerHTML;
     (html.match(EMAIL_RE) || []).forEach(e => {
@@ -156,12 +208,28 @@ function __extractContactsInPage() {
     });
   } catch (_) {}
 
-  // Filter junk
+  // ===== Final filtering =====
   const blockEmail = /(sentry|wixpress|example\.com|test@test|noreply@example|yoursite|yourdomain|your-email|@x\.com$|^[0-9a-f]{16,}@)/i;
+
+  // Phone cleanup: normalize and deduplicate by digit content
+  const seenDigits = new Set();
+  const cleanPhones = [];
+  Array.from(phones).forEach(p => {
+    const digits = p.replace(/\D/g, "");
+    // Must be 10-15 digits for a real phone
+    if (digits.length < 10 || digits.length > 15) return;
+    // Skip if looks like a price
+    if (/^\d{1,3},\d{3}/.test(p)) return; // 1,234,567 pattern = price
+    if (seenDigits.has(digits)) return;
+    // If starts with 0 but not 01X (BD mobile), skip short ones
+    if (/^0[^1]/.test(digits) && digits.length < 10) return;
+    seenDigits.add(digits);
+    cleanPhones.push(p);
+  });
 
   return {
     emails: Array.from(emails).filter(e => !blockEmail.test(e) && e.length < 80 && e.length > 5),
-    phones: Array.from(phones).filter(p => p.length < 30).slice(0, 15)
+    phones: cleanPhones.slice(0, 15)
   };
 }
 
