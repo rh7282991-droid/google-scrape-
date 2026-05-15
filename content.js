@@ -324,8 +324,9 @@
     for (let i = 0; i < results.length && !SHOULD_STOP; i++) {
       const { card, data } = results[i];
 
-      // Skip if already has phone AND website AND address (fully enriched)
-      if (data.phone && data.website && data.address) continue;
+      // Skip ONLY if has phone WITH country code AND website AND address
+      const hasFullPhone = data.phone && data.phone.startsWith("+");
+      if (hasFullPhone && data.website && data.address) continue;
 
       // CAPTCHA check every 8 profiles
       if (enriched > 0 && enriched % 8 === 0) {
@@ -354,8 +355,8 @@
         // Extract from detail panel
         const detail = extractFromDetailPanel();
 
-        // Merge: detail fills gaps
-        if (detail.phone && !data.phone) data.phone = detail.phone;
+        // Merge: detail ALWAYS wins for phone (has country code)
+        if (detail.phone) data.phone = detail.phone; // Always use detail phone (has +country code)
         if (detail.website && !data.website) data.website = detail.website;
         if (detail.address && !data.address) data.address = detail.address;
         if (detail.email) data.email = detail.email;
@@ -539,11 +540,8 @@
       // === PHASE 3: Save All ===
       const saved = await phase3_save(limited);
 
-      // Trigger background deep-enrich if enabled
-      const { deepEnrich } = await chrome.storage.local.get(["deepEnrich"]);
-      if (deepEnrich) {
-        try { await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" }); } catch (_) {}
-      }
+      // ALWAYS trigger background deep-enrich for emails (automatic)
+      try { await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" }); } catch (_) {}
 
       await setProgress({
         isRunning: false, title: "Done!",
