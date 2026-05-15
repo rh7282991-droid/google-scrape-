@@ -1,93 +1,70 @@
-# Google Lead Scraper (Chrome Extension)
+# Google Maps Lead Scraper
 
-একটি **free Chrome extension** যা Google search results থেকে lead data (title, URL, description, email, phone) collect করে CSV/JSON হিসেবে export করে। কোনো **proxy, API, বা paid service লাগে না** — কারণ এটা আপনার own browser থেকে চলে, তাই Google IP block-এর কোনো ভয় নাই।
+A free Chrome extension that collects business leads (name, phone, website, address, rating, etc.) from **Google Maps** automatically.
 
-## Features
+No proxy. No API key. No login. Works on your own browser session.
 
-- ✅ Google SERP থেকে title / URL / description extract করে
-- ✅ Snippet থেকে email আর phone number auto-detect করে
-- ✅ "Auto-scrape" mode — Google search-এর প্রতিটা page-এ automatic scrape
-- ✅ "Auto-next" mode — automatically next page-এ যায় (with random 2–5s delay)
-- ✅ "Deep-scrape" — saved প্রতিটা URL visit করে আরো emails/phones খোঁজে
-- ✅ CSV / JSON export
-- ✅ Manifest V3, no third-party dependency
+---
 
-## Install (Developer mode)
+## ✨ Features
 
-1. এই repository clone বা download করেন:
-   ```bash
-   git clone https://github.com/rh7282991-droid/google-scrape-.git
-   ```
-2. Chrome-এ `chrome://extensions` open করেন।
-3. উপরের ডান কোণায় **Developer mode** ON করেন।
-4. **Load unpacked** click করে এই folder-টা select করেন।
-5. Extension icon toolbar-এ চলে আসবে।
+- **Bulk search** — multiple keywords × locations in one campaign
+- **Auto-scroll** — loads more results until end of list
+- **Auto-click each profile** — opens every business detail panel and extracts data
+- **Real Google Maps page** — you can watch the scraping happen in your tab
+- **Pause / Resume / Stop** — full control any time
+- **Export** — CSV, TSV (Google Sheets), or copy-paste directly to Sheets
+- **Filters** — only with phone, only with address, only with website
+- **Auto-resume** — survives page reloads
+- **No CAPTCHA bypass** — only public/visible information
 
-## How to use
+---
 
-### Basic — current page scrape
+## 🚀 Install
 
-1. `https://www.google.com/search?q=...` open করেন (যেমন: `"founder" site:linkedin.com dhaka`)
-2. Extension icon click করেন → **Scrape this page**
-3. কতগুলো result পাওয়া গেছে toast-এ দেখাবে
+1. Download or clone this repo
+   - GitHub: **Code → Download ZIP** → extract
+   - Or `git clone https://github.com/rh7282991-droid/google-scrape-.git`
+2. Open `chrome://extensions`
+3. Enable **Developer mode** (top right)
+4. Click **Load unpacked**
+5. Select the folder that contains `manifest.json`
 
-### Auto mode — multiple pages
+---
 
-1. Popup-এ **Auto-scrape on every Google page** ON করেন
-2. **Auto-click "Next page"** ON করেন
-3. **Max pages** set করেন (default 5)
-4. Google search চালু করেন — extension নিজে নিজে সব page scrape করবে এবং next-এ যাবে
-5. Random 2–5s delay দেয়া আছে যেন human-like দেখায়
+## 📋 How to use
 
-### Deep-scrape (lead-এর জন্য সবচেয়ে useful)
+1. Click the extension icon to open the popup
+2. **Campaign Setup**:
+   - **Business Keywords** — one per line (e.g. `cafe`, `restaurant`)
+   - **Locations** — one per line (e.g. `dhaka`, `chittagong`)
+   - **Target Leads** — total leads you want
+   - **Profile Wait** — pause time per profile (5 sec is balanced; 7+ is safer)
+3. Click **Start Profile Collection**
+4. The extension opens Google Maps in your active tab and starts collecting
+5. Watch the live progress in the popup. You can **Pause / Resume / Stop** any time
+6. When done, click **Download Excel CSV** or **Copy to Google Sheets**
 
-Google snippet-এ সাধারণত email/phone থাকে না। Deep-scrape প্রতিটা saved URL visit করে real email/phone খুঁজে আনে।
+### Tips
 
-1. আগে কিছু leads scrape করেন (উপরের method-এ)
-2. Popup-এ **Run deep-scrape on saved leads** click করেন
-3. কয়েক মিনিট লাগবে (page-এর সংখ্যার উপর depend করে)
+- More **profile wait** = safer (less chance of Google rate-limiting you)
+- Use specific keywords + cities (e.g. `vegan cafe in dhanmondi`) for better leads
+- The extension dedupes by business name + phone
 
-### Export
+---
 
-- **Export CSV** — Excel/Google Sheets-এ open করার জন্য
-- **Export JSON** — programming use-এর জন্য
-- **Clear all** — সব saved data delete করে
-
-## Search queries যেগুলো leads-এর জন্য কাজ করে
-
-ভালো lead পেতে Google search query smart হতে হয়:
-
-```
-"contact us" "dhaka" restaurant
-intext:"@gmail.com" "founder" startup bangladesh
-site:linkedin.com/in/ "marketing manager" dhaka
-"+880" inurl:contact textile manufacturer
-"info@" site:.com.bd hospital
-```
-
-## How it stays unblocked
-
-- কোনো automated `requests` call Google-এ যায় না
-- পুরোটাই আপনার own logged-in browser session-এ চলে — Google-এর কাছে এটা normal user browsing-এর মতো লাগে
-- Auto-next mode-এ random 2–5s delay দেয়া হয়েছে যেন bot pattern detect না হয়
-- Tip: একটানা ৫০-১০০+ page scrape না করাই ভালো — ছোট batch-এ break নিন
-
-## Files
+## 📂 Files
 
 | File | Purpose |
 |------|---------|
-| `manifest.json` | Chrome extension manifest (V3) |
-| `content.js` | Google SERP-এ inject হয়, results extract করে |
-| `background.js` | Service worker — CSV export, deep-scrape |
+| `manifest.json` | Chrome extension manifest (MV3) |
 | `popup.html` / `popup.css` / `popup.js` | UI |
-| `icons/` | Extension icons |
+| `content.js` | Engine — runs on Google Maps, scrolls, clicks, extracts |
+| `background.js` | Service worker — initializes state, keeps content.js alive |
+| `assets/logo.svg` | Extension icon |
 
-## Limitations
+---
 
-- Google SERP layout মাঝে মাঝে change হয়; selectors update লাগতে পারে
-- Deep-scrape কিছু site-এ block হবে (Cloudflare, captcha, etc.)
-- LinkedIn-এর মতো site-এ login wall থাকে — সেখানে deep-scrape কাজ করবে না
+## ⚠️ Disclaimer
 
-## Disclaimer
-
-এই tool শুধু **personal/educational use**-এর জন্য। যেই data collect করছেন সেটা যে website থেকে আনছেন, তাদের Terms of Service এবং local privacy laws (GDPR, etc.) মেনে use করেন। Spam-এর জন্য ব্যবহার করবেন না।
+Use responsibly. This tool only reads **public** Google Maps data the same way a human user could. Respect Google's Terms of Service and any local laws regarding contacting businesses. Don't spam.

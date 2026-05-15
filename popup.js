@@ -1,148 +1,281 @@
-// popup.js — UI controller
+// popup.js — UI controller. Talks to content script via background.
 
 const $ = (id) => document.getElementById(id);
-const statusEl = $("status");
 
-const ALL_FIELDS = ["title", "url", "description", "domain", "emails", "phones", "position", "query"];
-const DEFAULT_FIELDS = {
-  title: true, url: true, description: true, domain: true,
-  emails: true, phones: true, position: false, query: false
+const DEFAULTS = {
+  keywords: "cafe",
+  locations: "dhaka",
+  targetLeads: 100,
+  maxPerSearch: 50,
+  profileWait: 5,
+  scrollLimit: 25,
+  filterPhone: false,
+  filterAddress: false,
+  filterWebsite: false
 };
 
-function setStatus(msg) {
-  statusEl.textContent = msg;
-}
-
-async function refreshCount() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  $("count").textContent = `${leads.length} leads`;
-}
-
+// ---------- Settings ----------
 async function loadSettings() {
-  const s = await chrome.storage.local.get([
-    "autoScrape", "autoNext", "autoMaxPages", "fields"
-  ]);
-  $("autoScrape").checked = !!s.autoScrape;
-  $("autoNext").checked = !!s.autoNext;
-  $("autoMaxPages").value = s.autoMaxPages || 5;
-
-  const fields = s.fields || DEFAULT_FIELDS;
-  for (const f of ALL_FIELDS) {
-    const el = $(`f_${f}`);
-    if (el) el.checked = !!fields[f];
-  }
+  const s = await chrome.storage.local.get(Object.keys(DEFAULTS));
+  $("keywords").value = s.keywords ?? DEFAULTS.keywords;
+  $("locations").value = s.locations ?? DEFAULTS.locations;
+  $("targetLeads").value = s.targetLeads ?? DEFAULTS.targetLeads;
+  $("maxPerSearch").value = s.maxPerSearch ?? DEFAULTS.maxPerSearch;
+  $("profileWait").value = s.profileWait ?? DEFAULTS.profileWait;
+  $("scrollLimit").value = s.scrollLimit ?? DEFAULTS.scrollLimit;
+  $("filterPhone").checked = !!s.filterPhone;
+  $("filterAddress").checked = !!s.filterAddress;
+  $("filterWebsite").checked = !!s.filterWebsite;
 }
 
-async function saveSetting(key, value) {
-  await chrome.storage.local.set({ [key]: value });
+async function saveSettings() {
+  await chrome.storage.local.set({
+    keywords: $("keywords").value,
+    locations: $("locations").value,
+    targetLeads: Number($("targetLeads").value) || 100,
+    maxPerSearch: Number($("maxPerSearch").value) || 50,
+    profileWait: Number($("profileWait").value) || 5,
+    scrollLimit: Number($("scrollLimit").value) || 25,
+    filterPhone: $("filterPhone").checked,
+    filterAddress: $("filterAddress").checked,
+    filterWebsite: $("filterWebsite").checked
+  });
 }
 
-async function saveFields() {
-  const fields = {};
-  for (const f of ALL_FIELDS) {
-    fields[f] = !!$(`f_${f}`).checked;
-  }
-  await chrome.storage.local.set({ fields });
-}
+// Auto-save when fields change
+["keywords","locations","targetLeads","maxPerSearch","profileWait","scrollLimit",
+ "filterPhone","filterAddress","filterWebsite"].forEach(id => {
+  $(id).addEventListener("change", saveSettings);
+  $(id).addEventListener("input", saveSettings);
+});
 
-async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab;
-}
+// ---------- Progress rendering ----------
+function renderState(state) {
+  if (!state) return;
+  const collected = state.collected || 0;
+  const target = state.target || 0;
+  const pct = target > 0 ? Math.min(100, Math.round((collected / target) * 100)) : 0;
 
-// ----- Progress UI -----
-function renderProgress(p) {
-  const box = $("progressBox");
-  if (!p || !p.isRunning) {
-    box.style.display = "none";
-    return;
-  }
-  box.style.display = "block";
-  $("progressTitle").textContent = p.title || "Working...";
-  $("progPage").textContent = p.currentPage || 0;
-  $("progPageTotal").textContent = p.totalPages || "?";
-  $("progFound").textContent = p.totalFound || 0;
-  $("progCurrent").textContent = p.currentItem || "";
-
-  const pct = p.totalPages > 0
-    ? Math.min(100, Math.round((p.currentPage / p.totalPages) * 100))
-    : (p.percent || 0);
+  $("progressPct").textContent = pct + "%";
   $("progressFill").style.width = pct + "%";
+  $("statCollected").textContent = collected;
+  $("statPhone").textContent = state.phoneCount || 0;
+  $("statAddress").textContent = state.addressCount || 0;
+  $("statQueue").textContent = state.queue || 0;
+
+  if (state.logs && state.logs.length) {
+    $("logBox").textContent = state.logs.slice(-12).join("\n");
+    $("logBox").scrollTop = $("logBox").scrollHeight;
+  }
+
+  // Toggle button states
+  const running = state.status === "running";
+  const paused = state.status === "paused";
+  $("startBtn").disabled = running || paused;
+  $("startBtn").textContent = running ? "Collecting..." : (paused ? "Paused" : "Start Profile Collection");
+  $("pauseBtn").disabled = !running;
+  $("resumeBtn").disabled = !paused;
+  $("stopBtn").disabled = state.status === "idle" || state.status === "stopped";
 }
 
-async function pollProgress() {
-  const { progress } = await chrome.storage.local.get(["progress"]);
-  renderProgress(progress);
-  refreshCount();
+async function refreshState() {
+  const { state } = await chrome.storage.local.get(["state"]);
+  renderState(state || { status: "idle", collected: 0, target: 0, queue: 0, logs: [] });
+  refreshLeadCount();
+}
+
+async function refreshLeadCount() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  // (lead count shown in stats already; nothing extra)
 }
 
 // React to live updates from content/background scripts
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.progress) renderProgress(changes.progress.newValue);
-  if (changes.leads) refreshCount();
+  if (changes.state) renderState(changes.state.newValue);
 });
 
-// ----- Buttons -----
-$("scrapeNow").addEventListener("click", async () => {
+// ---------- Tab helpers ----------
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
+function isMapsUrl(url) {
+  return /^https?:\/\/www\.google\.[a-z.]+\/maps/i.test(url || "");
+}
+
+async function ensureMapsTab() {
   const tab = await getActiveTab();
-  if (!tab || !/^https?:\/\/(www\.)?google\.com\/search/.test(tab.url || "")) {
-    setStatus("Please open google.com/search first.");
+  if (tab && isMapsUrl(tab.url)) return tab;
+  // Open Google Maps in current tab
+  const newTab = await chrome.tabs.update(tab.id, { url: "https://www.google.com/maps" });
+  // Wait for it to load
+  await new Promise(r => setTimeout(r, 2500));
+  return newTab;
+}
+
+async function sendToContent(tabId, msg) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, msg);
+  } catch (e) {
+    // Inject content.js if missing
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content.js"]
+      });
+      await new Promise(r => setTimeout(r, 400));
+      return await chrome.tabs.sendMessage(tabId, msg);
+    } catch (e2) {
+      console.warn("sendToContent failed:", e2);
+      return null;
+    }
+  }
+}
+
+// ---------- Buttons: Campaign actions ----------
+$("startBtn").addEventListener("click", async () => {
+  await saveSettings();
+  const tab = await ensureMapsTab();
+  if (!tab) return;
+
+  const config = {
+    keywords: $("keywords").value.split("\n").map(s => s.trim()).filter(Boolean),
+    locations: $("locations").value.split("\n").map(s => s.trim()).filter(Boolean),
+    targetLeads: Number($("targetLeads").value) || 100,
+    maxPerSearch: Number($("maxPerSearch").value) || 50,
+    profileWaitSec: Number($("profileWait").value) || 5,
+    scrollLimit: Number($("scrollLimit").value) || 25
+  };
+
+  if (!config.keywords.length || !config.locations.length) {
+    alert("Please enter at least one keyword and one location.");
     return;
   }
-  setStatus("Scraping current page...");
+
+  await sendToContent(tab.id, { type: "START", config });
+  refreshState();
+});
+
+$("pauseBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (tab) await sendToContent(tab.id, { type: "PAUSE" });
+});
+
+$("resumeBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (tab) await sendToContent(tab.id, { type: "RESUME" });
+});
+
+$("stopBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (tab) await sendToContent(tab.id, { type: "STOP" });
+});
+
+$("clearBtn").addEventListener("click", async () => {
+  if (!confirm("Clear all leads and reset session?")) return;
+  await chrome.storage.local.set({
+    leads: [],
+    state: { status: "idle", collected: 0, target: 0, queue: 0, phoneCount: 0, addressCount: 0, logs: ["Session cleared."] }
+  });
+  refreshState();
+});
+
+// ---------- Paste helpers ----------
+$("pasteKeywords").addEventListener("click", async () => {
   try {
-    const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
-    if (res) {
-      setStatus(`Found ${res.found} result(s), ${res.added} new saved.`);
-    } else {
-      setStatus("No response from page. Try reloading the search page.");
-    }
-  } catch (e) {
-    setStatus("Could not reach page. Reload the Google search tab.");
-  }
-  refreshCount();
+    const text = await navigator.clipboard.readText();
+    if (text) { $("keywords").value = text.trim(); saveSettings(); }
+  } catch (_) { alert("Could not read clipboard"); }
+});
+$("pasteLocations").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) { $("locations").value = text.trim(); saveSettings(); }
+  } catch (_) { alert("Could not read clipboard"); }
 });
 
-$("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
-$("autoNext").addEventListener("change", (e) => saveSetting("autoNext", e.target.checked));
-$("autoMaxPages").addEventListener("change", (e) =>
-  saveSetting("autoMaxPages", Number(e.target.value) || 5)
-);
-ALL_FIELDS.forEach(f => {
-  const el = $(`f_${f}`);
-  if (el) el.addEventListener("change", saveFields);
-});
+$("doneBtn").addEventListener("click", () => window.close());
 
-$("runDeep").addEventListener("click", async () => {
-  setStatus("Starting deep-scrape... (this may take a while)");
-  const res = await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" });
-  if (res && res.ok) {
-    setStatus(`Deep-scrape done. Updated ${res.updated} leads.`);
-  } else {
-    setStatus(`Deep-scrape failed: ${res ? res.error : "unknown error"}`);
+// ---------- Export ----------
+function applyFilters(leads) {
+  let out = leads.slice();
+  if ($("filterPhone").checked) out = out.filter(l => l.phone);
+  if ($("filterAddress").checked) out = out.filter(l => l.address);
+  if ($("filterWebsite").checked) out = out.filter(l => l.website);
+  return out;
+}
+
+const EXPORT_HEADERS = ["name", "phone", "website", "address", "rating", "reviews",
+                        "category", "plusCode", "hours", "googleMapsUrl",
+                        "keyword", "location", "collectedAt"];
+
+function leadsToCsv(leads, sep = ",") {
+  const esc = (v) => {
+    if (v == null) return "";
+    const s = String(v).replace(/"/g, '""');
+    return `"${s}"`;
+  };
+  const lines = [EXPORT_HEADERS.map(esc).join(sep)];
+  for (const l of leads) {
+    lines.push(EXPORT_HEADERS.map(h => esc(l[h])).join(sep));
   }
-  refreshCount();
-});
+  return lines.join("\n");
+}
+
+function downloadFile(text, filename, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+}
 
 $("exportCsv").addEventListener("click", async () => {
-  const res = await chrome.runtime.sendMessage({ type: "EXPORT_CSV" });
-  setStatus(res && res.ok ? "CSV exported to Downloads." : "Nothing to export.");
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const filtered = applyFilters(leads);
+  if (!filtered.length) { alert("No leads match your filters."); return; }
+  const stamp = new Date().toISOString().slice(0, 10);
+  downloadFile(leadsToCsv(filtered, ","), `mapleads-${stamp}.csv`, "text/csv");
 });
 
-$("exportJson").addEventListener("click", async () => {
-  const res = await chrome.runtime.sendMessage({ type: "EXPORT_JSON" });
-  setStatus(res && res.ok ? "JSON exported to Downloads." : "Nothing to export.");
+$("exportTsv").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const filtered = applyFilters(leads);
+  if (!filtered.length) { alert("No leads match your filters."); return; }
+  const stamp = new Date().toISOString().slice(0, 10);
+  // TSV uses tabs and no quoting
+  const headers = EXPORT_HEADERS.join("\t");
+  const rows = filtered.map(l => EXPORT_HEADERS.map(h => String(l[h] ?? "").replace(/[\t\n\r]/g, " ")).join("\t"));
+  downloadFile(headers + "\n" + rows.join("\n"), `mapleads-${stamp}.tsv`, "text/tab-separated-values");
 });
 
-$("clear").addEventListener("click", async () => {
-  if (!confirm("Delete all saved leads?")) return;
-  await chrome.storage.local.set({ leads: [] });
-  setStatus("All leads cleared.");
-  refreshCount();
+$("copySheets").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const filtered = applyFilters(leads);
+  if (!filtered.length) { alert("No leads match your filters."); return; }
+  const headers = EXPORT_HEADERS.join("\t");
+  const rows = filtered.map(l => EXPORT_HEADERS.map(h => String(l[h] ?? "").replace(/[\t\n\r]/g, " ")).join("\t"));
+  const tsv = headers + "\n" + rows.join("\n");
+  try {
+    await navigator.clipboard.writeText(tsv);
+    alert("Copied! Now paste (Ctrl+V) into Google Sheets.");
+  } catch (e) {
+    alert("Could not copy to clipboard.");
+  }
 });
 
-// init
+$("exportDebug").addEventListener("click", async () => {
+  const data = await chrome.storage.local.get(null);
+  downloadFile(JSON.stringify(data, null, 2), `mapleads-debug-${Date.now()}.json`, "application/json");
+});
+
+// ---------- Init ----------
 loadSettings();
-refreshCount();
-pollProgress();
+refreshState();
+// Poll occasionally in case storage events miss
+setInterval(refreshState, 2000);

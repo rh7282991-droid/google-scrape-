@@ -1,44 +1,54 @@
 {
   "manifest_version": 3,
-  "name": "Google Lead Scraper",
+  "name": "Google Maps Lead Scraper",
   "version": "1.0.0",
-  "description": "Free Google search lead scraper. Extracts titles, URLs, descriptions, emails and phone numbers from SERP. No proxy, no API needed.",
-  "permissions": [
-    "storage",
-    "downloads",
-    "scripting",
-    "tabs"
-  ],
-  "host_permissions": [
-    "https://www.google.com/*",
-    "https://google.com/*",
-    "<all_urls>"
-  ],
+  "description": "Free Google Maps lead collector. Extract business name, phone, website, address, rating. No API, no proxy.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "assets/logo.svg",
+    "default_title": "Google Maps Lead Scraper"
+  },
   "background": {
     "service_worker": "background.js"
   },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Google Lead Scraper",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "downloads",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://www.google.com/*",
+    "https://www.google.com.bd/*",
+    "https://www.google.co.in/*",
+    "https://www.google.co.uk/*",
+    "https://www.google.ca/*",
+    "https://www.google.com.au/*",
+    "https://www.google.de/*",
+    "*://www.google.*/*"
+  ],
   "content_scripts": [
     {
       "matches": [
-        "https://www.google.com/search*",
-        "https://google.com/search*"
+        "*://www.google.com/maps/*",
+        "*://www.google.com.bd/maps/*",
+        "*://www.google.co.in/maps/*",
+        "*://www.google.co.uk/maps/*",
+        "*://www.google.ca/maps/*",
+        "*://www.google.com.au/maps/*",
+        "*://www.google.de/maps/*",
+        "*://www.google.fr/maps/*",
+        "*://www.google.com/search?tbm=lcl*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/logo.svg"],
+      "matches": ["<all_urls>"]
     }
   ]
 }

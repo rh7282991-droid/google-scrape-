@@ -2,83 +2,123 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Google Lead Scraper</title>
+  <title>Google Maps Lead Scraper</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <header>
-    <h1>Google Lead Scraper</h1>
-    <span id="count" class="badge">0 leads</span>
-  </header>
+  <!-- ===== Header ===== -->
+  <div class="header-card">
+    <div class="header-row">
+      <img src="assets/logo.svg" alt="Logo" class="logo" />
+      <div class="header-text">
+        <h1>MapLead</h1>
+        <p class="tagline">Profile-only deep lead collector • Free Lifetime</p>
+      </div>
+      <button id="doneBtn" class="btn-done">Done</button>
+    </div>
+  </div>
 
-  <section class="status" id="status">Ready.</section>
+  <!-- ===== Campaign Setup ===== -->
+  <div class="card">
+    <h2>Campaign Setup</h2>
 
-  <!-- Live progress -->
-  <section class="progress-box" id="progressBox" style="display:none;">
-    <div class="progress-header">
-      <span class="dot"></span>
-      <span id="progressTitle">Working...</span>
+    <label>Business Keywords</label>
+    <textarea id="keywords" rows="2" placeholder="cafe&#10;restaurant"></textarea>
+    <button id="pasteKeywords" class="btn-blue full">Paste Keywords</button>
+
+    <label class="mt">Locations</label>
+    <textarea id="locations" rows="2" placeholder="dhaka&#10;chittagong"></textarea>
+    <button id="pasteLocations" class="btn-blue full">Paste Locations</button>
+
+    <div class="grid2 mt">
+      <div>
+        <label>Target Leads</label>
+        <input type="number" id="targetLeads" value="100" min="1" max="10000" />
+      </div>
+      <div>
+        <label>Max per Search</label>
+        <input type="number" id="maxPerSearch" value="50" min="1" max="500" />
+      </div>
+    </div>
+
+    <div class="grid2 mt">
+      <div>
+        <label>Profile Wait</label>
+        <select id="profileWait">
+          <option value="3">3 sec Fast</option>
+          <option value="5" selected>5 sec Normal</option>
+          <option value="7">7 sec Safer</option>
+          <option value="10">10 sec Safest</option>
+        </select>
+      </div>
+      <div>
+        <label>Search Scroll Limit</label>
+        <input type="number" id="scrollLimit" value="25" min="1" max="100" />
+      </div>
+    </div>
+
+    <button id="startBtn" class="btn-gradient full mt">Start Profile Collection</button>
+  </div>
+
+  <!-- ===== Progress ===== -->
+  <div class="card">
+    <div class="progress-head">
+      <h2>Progress</h2>
+      <span id="progressPct">0%</span>
     </div>
     <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    <div class="progress-meta">
-      <span>Page <b id="progPage">0</b>/<b id="progPageTotal">0</b></span>
-      <span><b id="progFound">0</b> leads</span>
-    </div>
-    <div class="progress-current" id="progCurrent"></div>
-  </section>
 
-  <section class="controls">
-    <details class="field-picker" open>
-      <summary>Fields to extract</summary>
-      <div class="grid2">
-        <label class="chip"><input type="checkbox" id="f_title" /><span>Title</span></label>
-        <label class="chip"><input type="checkbox" id="f_url" /><span>URL</span></label>
-        <label class="chip"><input type="checkbox" id="f_description" /><span>Description</span></label>
-        <label class="chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
-        <label class="chip"><input type="checkbox" id="f_emails" /><span>Emails</span></label>
-        <label class="chip"><input type="checkbox" id="f_phones" /><span>Phones</span></label>
-        <label class="chip"><input type="checkbox" id="f_position" /><span>Position</span></label>
-        <label class="chip"><input type="checkbox" id="f_query" /><span>Search query</span></label>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-num" id="statCollected">0</div>
+        <div class="stat-label">Collected</div>
       </div>
-    </details>
-
-    <button id="scrapeNow" class="primary">Scrape this page</button>
-
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoScrape" />
-        <span>Auto-scrape on every Google page</span>
-      </label>
+      <div class="stat">
+        <div class="stat-num" id="statPhone">0</div>
+        <div class="stat-label">Phone</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" id="statAddress">0</div>
+        <div class="stat-label">Address</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" id="statQueue">0</div>
+        <div class="stat-label">Queue</div>
+      </div>
     </div>
 
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoNext" />
-        <span>Auto-click "Next page"</span>
-      </label>
+    <pre id="logBox" class="log-box">Idle. Configure your campaign and press Start.</pre>
+  </div>
+
+  <!-- ===== Controls ===== -->
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="grid2">
+      <button id="pauseBtn" class="btn-dark">Pause</button>
+      <button id="resumeBtn" class="btn-dark">Resume</button>
+      <button id="stopBtn" class="btn-dark">Stop</button>
+      <button id="clearBtn" class="btn-red">Clear Session</button>
     </div>
+  </div>
 
-    <div class="row inline">
-      <label for="autoMaxPages">Max pages:</label>
-      <input type="number" id="autoMaxPages" min="1" max="50" value="5" />
-    </div>
+  <!-- ===== Export ===== -->
+  <div class="card">
+    <h2>Export</h2>
+    <label class="check-row"><input type="checkbox" id="filterPhone" /> Only with phone</label>
+    <label class="check-row"><input type="checkbox" id="filterAddress" /> Only with address</label>
+    <label class="check-row"><input type="checkbox" id="filterWebsite" /> Only with website</label>
 
-    <hr />
+    <button id="exportCsv" class="btn-gradient full mt">Download Excel CSV</button>
+    <button id="exportTsv" class="btn-gradient full">Download Google Sheets TSV</button>
+    <button id="copySheets" class="btn-dark full">Copy to Google Sheets</button>
+    <button id="exportDebug" class="btn-dark full">Download Debug CSV</button>
+  </div>
 
-    <button id="runDeep" class="secondary">Deep-scrape saved leads (find more emails/phones)</button>
-
-    <hr />
-
-    <div class="actions">
-      <button id="exportCsv" class="secondary">Export CSV</button>
-      <button id="exportJson" class="secondary">Export JSON</button>
-      <button id="clear" class="danger">Clear all</button>
-    </div>
-  </section>
-
-  <footer>
-    <small>Tip: open <a href="https://www.google.com/search?q=%22founder%22+site%3Alinkedin.com+dhaka" target="_blank">google.com/search</a>, then click "Scrape this page".</small>
-  </footer>
+  <!-- ===== Logs ===== -->
+  <details class="card collapsible">
+    <summary>Logs</summary>
+    <p class="muted">No CAPTCHA bypass. No login bypass. Public/visible profiles only. May need many keywords/locations and may take a long time.</p>
+  </details>
 
   <script src="popup.js"></script>
 </body>

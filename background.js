@@ -1,191 +1,70 @@
-// background.js — service worker
-// Handles: CSV/JSON export, deep-scrape with live progress
+// background.js — service worker.
+// Initializes default storage, ensures content.js is injected when needed.
 
-const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+const DEFAULT_STATE = {
+  status: "idle",
+  collected: 0,
+  target: 0,
+  queue: 0,
+  phoneCount: 0,
+  addressCount: 0,
+  logs: ["Ready. Open the popup to start a campaign."]
+};
 
-// ----- Export helpers -----
+chrome.runtime.onInstalled.addListener(async () => {
+  const cur = await chrome.storage.local.get(["leads", "state"]);
+  if (!cur.leads) await chrome.storage.local.set({ leads: [] });
+  if (!cur.state) await chrome.storage.local.set({ state: DEFAULT_STATE });
+});
 
-function csvEscape(v) {
-  if (v == null) return "";
-  const s = String(v).replace(/"/g, '""');
-  return `"${s}"`;
-}
-
-function leadsToCsv(leads) {
-  // Build headers from union of keys present
-  const keys = new Set();
-  leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
-  // Preferred order
-  const preferred = ["title", "url", "domain", "description", "emails", "phones",
-                     "position", "query", "scrapedAt", "deepScrapedAt"];
-  const headers = preferred.filter(k => keys.has(k))
-    .concat([...keys].filter(k => !preferred.includes(k)));
-
-  const rows = [headers.map(csvEscape).join(",")];
-  for (const l of leads) {
-    rows.push(headers.map(h => {
-      const v = l[h];
-      if (Array.isArray(v)) return csvEscape(v.join("; "));
-      return csvEscape(v);
-    }).join(","));
-  }
-  return rows.join("\n");
-}
-
-function downloadText(text, filename, mime) {
-  const dataUrl = `data:${mime};charset=utf-8,` + encodeURIComponent(text);
-  return chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
-}
-
-// ----- Deep scrape -----
-
-function extractContactsFromHtml(html) {
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ");
-
-  const mailtos = Array.from(html.matchAll(/mailto:([^"'>\s?]+)/gi)).map(m => m[1]);
-  const tels = Array.from(html.matchAll(/tel:([^"'>\s?]+)/gi)).map(m => m[1]);
-
-  const emails = Array.from(new Set(
-    [...mailtos, ...(text.match(EMAIL_RE) || [])]
-      .map(s => s.toLowerCase())
-      .filter(s => !/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(s))
-  ));
-
-  const phonesRaw = [...tels, ...(text.match(PHONE_RE) || [])];
-  const phones = Array.from(new Set(
-    phonesRaw.map(p => p.trim()).filter(p => {
-      const digits = p.replace(/\D/g, "");
-      return digits.length >= 8 && digits.length <= 15;
-    })
-  ));
-
-  return { emails, phones };
-}
-
-async function fetchPage(url) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 12000);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal, redirect: "follow",
-      headers: { "Accept": "text/html,application/xhtml+xml" }
-    });
-    if (!res.ok) return null;
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.includes("text/html") && !ct.includes("application/xhtml")) return null;
-    return await res.text();
-  } catch (_) { return null; }
-  finally { clearTimeout(t); }
-}
-
-async function setProgress(patch) {
-  const { progress = {} } = await chrome.storage.local.get(["progress"]);
+chrome.runtime.onStartup.addListener(async () => {
+  // Reset transient run-state if browser restarted
   await chrome.storage.local.set({
-    progress: { ...progress, ...patch, updatedAt: Date.now() }
+    state: { ...DEFAULT_STATE, logs: ["Browser restarted — previous run discarded."] }
   });
-}
+  await chrome.storage.local.remove(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget", "activeTask"]);
+});
 
-async function deepScrapeAll() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  if (!leads.length) return { ok: false, error: "No leads saved" };
-
-  await setProgress({
-    isRunning: true,
-    title: "Deep-scraping URLs...",
-    currentPage: 0,
-    totalPages: leads.length,
-    totalFound: 0,
-    currentItem: ""
-  });
-
-  let updated = 0;
-  let processed = 0;
-  let totalContacts = 0;
-
-  const BATCH = 3;
-  for (let i = 0; i < leads.length; i += BATCH) {
-    const batch = leads.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (lead, idx) => {
-      processed++;
-      await setProgress({
-        currentPage: processed,
-        currentItem: `Visiting: ${lead.domain || lead.url}`
-      });
-
-      if ((lead.emails || []).length && (lead.phones || []).length) return;
-      const html = await fetchPage(lead.url);
-      if (!html) return;
-      const { emails, phones } = extractContactsFromHtml(html);
-      lead.emails = Array.from(new Set([...(lead.emails || []), ...emails]));
-      lead.phones = Array.from(new Set([...(lead.phones || []), ...phones]));
-      lead.deepScrapedAt = new Date().toISOString();
-      if (emails.length || phones.length) {
-        updated++;
-        totalContacts += emails.length + phones.length;
-      }
-      await setProgress({ totalFound: totalContacts });
-    }));
-    await chrome.storage.local.set({ leads });
-    await new Promise(r => setTimeout(r, 400 + Math.random() * 600));
+// Inject content.js when an existing Maps tab needs it
+async function ensureContentScriptInTab(tabId) {
+  try {
+    const r = await chrome.tabs.sendMessage(tabId, { type: "PING" });
+    if (r && r.ok) return true;
+  } catch (_) {}
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+    return true;
+  } catch (_) {
+    return false;
   }
-
-  await setProgress({
-    isRunning: false,
-    currentItem: `Done. ${updated} leads enriched.`
-  });
-  // auto-hide after a few seconds
-  setTimeout(async () => {
-    await chrome.storage.local.set({ progress: { isRunning: false } });
-  }, 4000);
-
-  return { ok: true, updated };
 }
 
-// ----- Message router -----
+// When user navigates a Maps tab, make sure our script is alive
+chrome.webNavigation?.onCompleted?.addListener?.(async (details) => {
+  if (details.frameId !== 0) return;
+  if (!/^https?:\/\/www\.google\.[a-z.]+\/maps/i.test(details.url || "")) return;
+  await ensureContentScriptInTab(details.tabId);
+}, { url: [{ hostContains: "google." }] });
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// Allow popup or other parts to ask the SW for utility actions
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
-      if (msg.type === "EXPORT_CSV") {
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
-        if (!leads.length) return sendResponse({ ok: false });
-        const csv = leadsToCsv(leads);
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        await downloadText(csv, `google-leads-${stamp}.csv`, "text/csv");
-        sendResponse({ ok: true });
-      } else if (msg.type === "EXPORT_JSON") {
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
-        if (!leads.length) return sendResponse({ ok: false });
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        await downloadText(JSON.stringify(leads, null, 2), `google-leads-${stamp}.json`, "application/json");
-        sendResponse({ ok: true });
-      } else if (msg.type === "DEEP_SCRAPE_ALL") {
-        const r = await deepScrapeAll();
-        sendResponse(r);
+      if (msg && msg.type === "BG_PING") {
+        sendResponse({ ok: true, ts: Date.now() });
+      } else if (msg && msg.type === "BG_INJECT" && msg.tabId) {
+        const ok = await ensureContentScriptInTab(msg.tabId);
+        sendResponse({ ok });
       } else {
-        sendResponse({ ok: false, error: "unknown message" });
+        // Not handled here; ignore so other listeners can respond.
+        sendResponse({ ok: false, error: "noop" });
       }
     } catch (e) {
       sendResponse({ ok: false, error: String(e && e.message || e) });
     }
   })();
   return true;
-});
-
-chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields"]);
-  if (!cur.leads) await chrome.storage.local.set({ leads: [] });
-  if (!cur.autoMaxPages) await chrome.storage.local.set({ autoMaxPages: 5 });
-  if (!cur.fields) {
-    await chrome.storage.local.set({
-      fields: {
-        title: true, url: true, description: true, domain: true,
-        emails: true, phones: true, position: false, query: false
-      }
-    });
-  }
 });
