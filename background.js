@@ -840,6 +840,89 @@ async function scrapeOpeningHours() {
   return { ok: true, updated: enriched };
 }
 
+// ===== FEATURE 18: Duplicate Detection Across Sessions =====
+// Uses a persistent dedup index (domain + phone + name hash) to detect same business
+// across different search campaigns (e.g., "cafe dhaka" today, "restaurant dhaka" tomorrow)
+function generateDedupKey(lead) {
+  // Create a composite key from: normalized domain + normalized phone + normalized title
+  const parts = [];
+
+  // Domain is strongest signal
+  if (lead.domain) {
+    parts.push(lead.domain.toLowerCase().replace(/^www\./, ""));
+  }
+
+  // Phone number (digits only) — very strong unique identifier
+  const phones = lead.phones || [];
+  if (lead.phone) phones.push(lead.phone);
+  const normalizedPhones = phones
+    .map(p => p.replace(/\D/g, ""))
+    .filter(p => p.length >= 8)
+    .sort();
+  if (normalizedPhones.length > 0) {
+    parts.push("ph:" + normalizedPhones[0]);
+  }
+
+  // If no domain and no phone, use normalized title + address
+  if (parts.length === 0) {
+    const title = (lead.title || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
+    const addr = (lead.address || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 30);
+    if (title) parts.push("t:" + title);
+    if (addr) parts.push("a:" + addr);
+  }
+
+  return parts.length > 0 ? parts.join("|") : null;
+}
+
+async function runDeduplication() {
+  const { leads = [], dedupIndex = {} } = await chrome.storage.local.get(["leads", "dedupIndex"]);
+  if (!leads.length) return { ok: false, error: "No leads" };
+
+  const uniqueLeads = [];
+  const newIndex = { ...dedupIndex };
+  let removed = 0;
+
+  for (const lead of leads) {
+    const key = generateDedupKey(lead);
+    if (!key) {
+      // Can't generate key — keep the lead
+      uniqueLeads.push(lead);
+      continue;
+    }
+
+    if (newIndex[key]) {
+      // Duplicate found — skip but merge any new data into existing
+      removed++;
+    } else {
+      newIndex[key] = { firstSeen: lead.scrapedAt || new Date().toISOString(), source: lead.source || "search" };
+      uniqueLeads.push(lead);
+    }
+  }
+
+  await chrome.storage.local.set({ leads: uniqueLeads, dedupIndex: newIndex });
+  await updateLivePreview();
+  return { ok: true, removed, remaining: uniqueLeads.length, totalSeen: Object.keys(newIndex).length };
+}
+
+// Update dedup index when new leads are added (called from content scripts via storage)
+async function updateDedupIndex(newLeads) {
+  const { dedupIndex = {} } = await chrome.storage.local.get(["dedupIndex"]);
+  let newEntries = 0;
+
+  for (const lead of newLeads) {
+    const key = generateDedupKey(lead);
+    if (key && !dedupIndex[key]) {
+      dedupIndex[key] = { firstSeen: new Date().toISOString(), source: lead.source || "search" };
+      newEntries++;
+    }
+  }
+
+  if (newEntries > 0) {
+    await chrome.storage.local.set({ dedupIndex });
+  }
+  return newEntries;
+}
+
 // ===== Message router =====
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -879,6 +962,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "SCRAPE_HOURS") {
         const r = await scrapeOpeningHours();
         sendResponse(r);
+      } else if (msg.type === "RUN_DEDUP") {
+        const r = await runDeduplication();
+        sendResponse(r);
       } else if (msg.type === "GET_LIVE_PREVIEW") {
         await updateLivePreview();
         const { livePreview = [] } = await chrome.storage.local.get(["livePreview"]);
@@ -896,9 +982,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields"]);
+  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields", "dedupIndex"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
   if (!cur.autoMaxPages) await chrome.storage.local.set({ autoMaxPages: 5 });
+  if (!cur.dedupIndex) await chrome.storage.local.set({ dedupIndex: {} });
   if (!cur.fields) {
     await chrome.storage.local.set({
       fields: {
@@ -909,4 +996,17 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
   // Initialize live preview
   await updateLivePreview();
+});
+
+// Auto-update dedup index when leads change
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.leads && changes.leads.newValue) {
+    const oldLeads = changes.leads.oldValue || [];
+    const newLeads = changes.leads.newValue || [];
+    // Only index truly new leads (not already in old set)
+    if (newLeads.length > oldLeads.length) {
+      const newOnes = newLeads.slice(oldLeads.length);
+      updateDedupIndex(newOnes);
+    }
+  }
 });

@@ -107,6 +107,39 @@
 
     <hr />
 
+    <!-- FEATURE 20: Bulk Campaign Templates -->
+    <details class="feature-section">
+      <summary>Bulk Campaign Templates</summary>
+      <div class="section-body">
+        <select id="campaignTemplate" style="width:100%;padding:6px;border:1px solid #dadce0;border-radius:4px;font-size:12px;margin-bottom:6px;">
+          <option value="">-- Select a template --</option>
+          <option value="restaurant">Restaurant Lead Pack (20 keywords x 10 cities)</option>
+          <option value="beauty">Beauty Industry Pack (salon, parlor, spa...)</option>
+          <option value="healthcare">Healthcare Pack (clinic, doctor, hospital...)</option>
+          <option value="education">Education Pack (school, coaching, training...)</option>
+          <option value="tech">Tech/IT Pack (software, agency, startup...)</option>
+          <option value="realestate">Real Estate Pack (property, agent, developer...)</option>
+        </select>
+        <div id="campaignPreview" style="font-size:10px;color:#5f6368;max-height:80px;overflow-y:auto;margin-bottom:6px;"></div>
+        <button id="runCampaign" class="primary" style="background:#7627bb;">Launch Campaign</button>
+        <p class="hint">Generates search URLs for bulk scraping. Open tabs manually or use auto-scrape.</p>
+      </div>
+    </details>
+
+    <hr />
+
+    <!-- FEATURE 18: Dedup Stats -->
+    <details class="feature-section">
+      <summary>Deduplication</summary>
+      <div class="section-body">
+        <p class="hint" id="dedupStats">Cross-session dedup active. Duplicates auto-skipped.</p>
+        <button id="runDedup" class="secondary">Remove Duplicates Now</button>
+        <button id="clearDedupDb" class="secondary danger" style="font-size:11px;padding:6px;">Reset Dedup History</button>
+      </div>
+    </details>
+
+    <hr />
+
     <div class="actions">
       <button id="exportCsv" class="secondary">Export CSV</button>
       <button id="exportJson" class="secondary">Export JSON</button>

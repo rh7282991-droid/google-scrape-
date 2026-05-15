@@ -324,8 +324,161 @@ $("clear").addEventListener("click", async () => {
   loadPreview();
 });
 
+// ===== FEATURE 18: Duplicate Detection Across Sessions =====
+$("runDedup").addEventListener("click", async () => {
+  setStatus("Removing duplicates...");
+  const res = await chrome.runtime.sendMessage({ type: "RUN_DEDUP" });
+  if (res && res.ok) {
+    setStatus(`Dedup done. Removed ${res.removed} duplicates (${res.remaining} remain).`);
+    loadDedupStats();
+  } else {
+    setStatus("Dedup failed.");
+  }
+  refreshCount();
+  loadPreview();
+});
+
+$("clearDedupDb").addEventListener("click", async () => {
+  if (!confirm("Reset dedup history? Future scrapes won't know about previously seen leads.")) return;
+  await chrome.storage.local.set({ dedupIndex: {} });
+  setStatus("Dedup history cleared.");
+  loadDedupStats();
+});
+
+async function loadDedupStats() {
+  const { dedupIndex = {}, leads = [] } = await chrome.storage.local.get(["dedupIndex", "leads"]);
+  const totalSeen = Object.keys(dedupIndex).length;
+  const el = $("dedupStats");
+  el.textContent = `Seen ${totalSeen} unique businesses across all sessions. Current: ${leads.length} leads.`;
+}
+
+// ===== FEATURE 20: Bulk Campaign Templates =====
+const CAMPAIGN_TEMPLATES = {
+  restaurant: {
+    name: "Restaurant Lead Pack",
+    keywords: ["restaurant", "cafe", "biryani house", "fast food", "chinese food", "thai food",
+               "pizza shop", "burger joint", "bakery", "ice cream", "dessert shop",
+               "catering service", "food delivery", "dine in", "buffet restaurant",
+               "seafood restaurant", "vegetarian restaurant", "rooftop restaurant",
+               "family restaurant", "fine dining"],
+    cities: ["Dhaka", "Chittagong", "Sylhet", "Rajshahi", "Khulna",
+             "Comilla", "Gazipur", "Narayanganj", "Rangpur", "Mymensingh"]
+  },
+  beauty: {
+    name: "Beauty Industry Pack",
+    keywords: ["beauty salon", "parlor", "spa", "nail art", "hair salon",
+               "bridal makeup", "skincare clinic", "beauty parlour",
+               "hair treatment", "facial treatment", "waxing salon",
+               "massage spa", "ayurvedic spa", "beauty academy",
+               "cosmetics shop", "makeup artist", "barber shop",
+               "men's grooming", "lash extension", "tattoo studio"],
+    cities: ["Dhaka", "Chittagong", "Sylhet", "Rajshahi", "Khulna",
+             "Comilla", "Gazipur", "Narayanganj", "Rangpur", "Mymensingh"]
+  },
+  healthcare: {
+    name: "Healthcare Pack",
+    keywords: ["clinic", "doctor chamber", "hospital", "diagnostic center",
+               "dental clinic", "eye hospital", "pharmacy", "health checkup",
+               "gynecologist", "pediatrician", "dermatologist", "cardiologist",
+               "physiotherapy", "homeopathy", "ayurvedic clinic",
+               "pathology lab", "blood bank", "ambulance service",
+               "nursing home", "mental health clinic"],
+    cities: ["Dhaka", "Chittagong", "Sylhet", "Rajshahi", "Khulna",
+             "Comilla", "Gazipur", "Narayanganj", "Rangpur", "Mymensingh"]
+  },
+  education: {
+    name: "Education Pack",
+    keywords: ["school", "coaching center", "training center", "tuition",
+               "english language course", "computer training", "IELTS coaching",
+               "university admission", "private tutor", "online course",
+               "skill development", "vocational training", "kindergarten",
+               "playgroup", "madrasa", "college", "engineering coaching",
+               "medical admission", "art school", "music school"],
+    cities: ["Dhaka", "Chittagong", "Sylhet", "Rajshahi", "Khulna",
+             "Comilla", "Gazipur", "Narayanganj", "Rangpur", "Mymensingh"]
+  },
+  tech: {
+    name: "Tech/IT Pack",
+    keywords: ["software company", "IT agency", "web development", "app development",
+               "digital marketing agency", "SEO service", "graphic design",
+               "tech startup", "e-commerce company", "data entry service",
+               "freelancer agency", "cloud service", "hosting provider",
+               "cybersecurity", "AI company", "blockchain company",
+               "ERP software", "POS system", "CCTV installation", "ISP provider"],
+    cities: ["Dhaka", "Chittagong", "Sylhet", "Rajshahi", "Khulna",
+             "Comilla", "Gazipur", "Narayanganj", "Rangpur", "Mymensingh"]
+  },
+  realestate: {
+    name: "Real Estate Pack",
+    keywords: ["real estate", "property developer", "flat sale", "apartment",
+               "land sale", "housing society", "real estate agent",
+               "commercial space", "office rent", "warehouse",
+               "interior design", "architect", "construction company",
+               "building material", "paint house", "tiles shop",
+               "plumbing service", "electrical contractor", "home renovation",
+               "property management"],
+    cities: ["Dhaka", "Chittagong", "Sylhet", "Rajshahi", "Khulna",
+             "Comilla", "Gazipur", "Narayanganj", "Rangpur", "Mymensingh"]
+  }
+};
+
+$("campaignTemplate").addEventListener("change", (e) => {
+  const key = e.target.value;
+  const preview = $("campaignPreview");
+  if (!key || !CAMPAIGN_TEMPLATES[key]) {
+    preview.textContent = "";
+    return;
+  }
+  const tmpl = CAMPAIGN_TEMPLATES[key];
+  const totalSearches = tmpl.keywords.length * tmpl.cities.length;
+  preview.innerHTML = `<b>${tmpl.name}</b>: ${tmpl.keywords.length} keywords × ${tmpl.cities.length} cities = <b>${totalSearches} searches</b><br>` +
+    `Keywords: ${tmpl.keywords.slice(0, 5).join(", ")}...<br>` +
+    `Cities: ${tmpl.cities.join(", ")}`;
+});
+
+$("runCampaign").addEventListener("click", async () => {
+  const key = $("campaignTemplate").value;
+  if (!key || !CAMPAIGN_TEMPLATES[key]) {
+    setStatus("Please select a campaign template first.");
+    return;
+  }
+  const tmpl = CAMPAIGN_TEMPLATES[key];
+  const totalSearches = tmpl.keywords.length * tmpl.cities.length;
+
+  if (!confirm(`This will generate ${totalSearches} search URLs for "${tmpl.name}". Continue?`)) return;
+
+  // Save campaign to storage for background to process
+  const campaign = {
+    name: tmpl.name,
+    keywords: tmpl.keywords,
+    cities: tmpl.cities,
+    status: "ready",
+    createdAt: new Date().toISOString()
+  };
+  await chrome.storage.local.set({ activeCampaign: campaign });
+
+  // Generate URLs list and copy to clipboard
+  const urls = [];
+  for (const kw of tmpl.keywords) {
+    for (const city of tmpl.cities) {
+      urls.push(`https://www.google.com/maps/search/${encodeURIComponent(kw + " " + city)}`);
+    }
+  }
+
+  // Store URLs for reference
+  await chrome.storage.local.set({ campaignUrls: urls });
+
+  // Copy first 5 URLs to show user
+  const sample = urls.slice(0, 5).join("\n");
+  setStatus(`Campaign "${tmpl.name}" ready! ${totalSearches} URLs generated. Open Maps tabs and use "Scrape Maps Results".`);
+
+  // Open first URL in a new tab as starting point
+  chrome.tabs.create({ url: urls[0], active: true });
+});
+
 // init
 loadSettings();
 refreshCount();
 pollProgress();
 loadPreview();
+loadDedupStats();
