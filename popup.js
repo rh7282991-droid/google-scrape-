@@ -51,13 +51,14 @@ function setStatusBadge(state) {
 }
 
 async function refreshCounts() {
-  const { leads = [], todayLeadCount = 0, lifetimeQuota = 300 } =
+  const { leads = [], todayLeadCount = 0, lifetimeQuota = 999999 } =
     await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
   $("totalCount").textContent = leads.length;
   $("totalLeadsHeader").textContent = leads.length;
   $("previewCount").textContent = leads.length;
   $("todayCount").textContent = todayLeadCount;
-  $("quotaLeft").textContent = Math.max(0, lifetimeQuota - leads.length);
+  const left = lifetimeQuota - leads.length;
+  $("quotaLeft").textContent = left > 99999 ? "∞" : Math.max(0, left);
 }
 
 async function getActiveTab() {

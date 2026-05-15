@@ -356,7 +356,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onInstalled.addListener(async () => {
   const cur = await chrome.storage.local.get(["leads", "fields", "accounts", "lifetimeQuota"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
-  if (!cur.lifetimeQuota) await chrome.storage.local.set({ lifetimeQuota: 300 });
+  if (!cur.lifetimeQuota) await chrome.storage.local.set({ lifetimeQuota: 999999 });
   if (!cur.fields) {
     await chrome.storage.local.set({
       fields: {

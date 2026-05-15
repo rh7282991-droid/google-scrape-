@@ -120,17 +120,55 @@
   // GOOGLE MAPS SCRAPER (Main feature)
   // ============================================
 
-  // Find the scrollable results sidebar
+  // Find the scrollable results sidebar — updated for 2024/2025 Google Maps DOM
   function findResultsContainer() {
-    // Modern Google Maps: scrollable feed with role="feed"
+    // 1. Modern Google Maps: role="feed" (most common in 2024+)
     let feed = document.querySelector('div[role="feed"]');
     if (feed) return feed;
-    // Fallback: any aria-label that contains "Results"
+
+    // 2. The main scrollable panel with results (class-based)
+    feed = document.querySelector('div.m6QErb[aria-label]');
+    if (feed) return feed;
+
+    // 3. Scrollable div inside the results panel
+    feed = document.querySelector('div.m6QErb.DxyBCb.kA9KIf.dS8AEf');
+    if (feed) return feed;
+
+    // 4. Any aria-label containing "Results"
     feed = document.querySelector('[aria-label*="Results for" i]');
     if (feed) return feed;
-    // Older layout
+    feed = document.querySelector('[aria-label*="Results" i]');
+    if (feed) return feed;
+
+    // 5. The scrollable container that holds place cards
+    feed = document.querySelector('div.m6QErb.WNBkOb');
+    if (feed) return feed;
+
+    // 6. Generic fallback: find any scrollable div with place links
+    const allDivs = document.querySelectorAll('div[role="main"] div');
+    for (const div of allDivs) {
+      if (div.scrollHeight > div.clientHeight && div.querySelector('a[href*="/maps/place/"]')) {
+        return div;
+      }
+    }
+
+    // 7. Older layout selectors
     feed = document.querySelector('.section-scrollbox, .section-listbox');
-    return feed || null;
+    if (feed) return feed;
+
+    // 8. Last resort: any parent of place links that is scrollable
+    const firstPlaceLink = document.querySelector('a[href*="/maps/place/"]');
+    if (firstPlaceLink) {
+      let parent = firstPlaceLink.parentElement;
+      while (parent && parent !== document.body) {
+        if (parent.scrollHeight > parent.clientHeight + 100) {
+          return parent;
+        }
+        parent = parent.parentElement;
+      }
+    }
+
+    return null;
   }
 
   // Extract place data from a single result card in the sidebar
@@ -144,16 +182,32 @@
       out.title = link.getAttribute("aria-label") || "";
     }
     if (!out.title) {
-      const heading = card.querySelector('div[role="heading"], .fontHeadlineSmall');
+      // Multiple heading selectors for different Maps versions
+      const heading = card.querySelector(
+        'div[role="heading"], .fontHeadlineSmall, .qBF1Pd, .NrDZNb, .dbg0pd'
+      );
       if (heading) out.title = heading.textContent.trim();
     }
+    // Clean title — remove trailing noise
+    if (out.title) out.title = out.title.replace(/\s*·\s*$/, "").trim();
 
-    // Rating + reviews count
-    const ratingEl = card.querySelector('span[role="img"][aria-label*="star" i]');
+    // Rating + reviews count — multiple selector strategies
+    let ratingEl = card.querySelector('span[role="img"][aria-label*="star" i]');
+    if (!ratingEl) ratingEl = card.querySelector('.MW4etd, .ZkP5Je');
     if (ratingEl) {
-      const lbl = ratingEl.getAttribute("aria-label") || "";
-      const m = lbl.match(/([\d.]+)\s*star/i);
+      const lbl = ratingEl.getAttribute("aria-label") || ratingEl.textContent || "";
+      const m = lbl.match(/([\d.]+)\s*star/i) || lbl.match(/([\d.]+)/);
       if (m) out.rating = parseFloat(m[1]);
+    }
+    // Review count
+    let reviewEl = card.querySelector('.UY7F9, span[aria-label*="review" i]');
+    if (reviewEl) {
+      const lbl = reviewEl.getAttribute("aria-label") || reviewEl.textContent || "";
+      const m2 = lbl.match(/(\d[\d,]*)/);
+      if (m2) out.reviewCount = parseInt(m2[1].replace(/,/g, ""));
+    }
+    if (!out.reviewCount && ratingEl) {
+      const lbl = ratingEl.getAttribute("aria-label") || "";
       const m2 = lbl.match(/(\d[\d,]*)\s*review/i);
       if (m2) out.reviewCount = parseInt(m2[1].replace(/,/g, ""));
     }
@@ -166,10 +220,14 @@
     const phoneMatch = allText.match(/\+?[\d][\d\s\-().]{7,}\d/);
     if (phoneMatch) out.phone = phoneMatch[0].trim();
 
-    // Try to identify address (line that contains a digit + street-like pattern)
+    // Try to identify address (line with digits + text, typical address pattern)
     for (const line of lines) {
       if (line === out.title) continue;
-      if (/\d/.test(line) && /[a-zA-Z]/.test(line) && line.length > 8 && line.length < 120) {
+      if (line === out.category) continue;
+      // Address patterns: contains number + letters, reasonable length
+      if (/\d/.test(line) && /[a-zA-Z\u0980-\u09FF]/.test(line) && line.length > 6 && line.length < 150) {
+        // Skip if it looks like rating/review text
+        if (/^\d+\.\d+$/.test(line) || /star|review/i.test(line)) continue;
         if (!out.address) {
           out.address = line;
           break;
@@ -177,19 +235,36 @@
       }
     }
 
-    // Category usually 2nd line after title
-    const titleIdx = lines.indexOf(out.title);
-    if (titleIdx >= 0 && lines[titleIdx + 1]) {
-      const next = lines[titleIdx + 1];
-      if (next.length < 50 && !/\d{3}/.test(next)) out.category = next;
+    // Category: look for specific element or use position heuristics
+    const catEl = card.querySelector('.W4Efsd .W4Efsd:first-child span:not([role])');
+    if (catEl && catEl.textContent.trim().length < 50) {
+      out.category = catEl.textContent.trim().replace(/^·\s*/, "").replace(/\s*·\s*$/, "");
+    }
+    if (!out.category) {
+      // Category usually after title, short text without digits
+      const titleIdx = lines.indexOf(out.title);
+      if (titleIdx >= 0) {
+        for (let i = titleIdx + 1; i < Math.min(titleIdx + 4, lines.length); i++) {
+          const next = lines[i];
+          if (next && next.length < 50 && next.length > 2 && !/^\d/.test(next) && !/\d{3}/.test(next)) {
+            // Skip known non-category text
+            if (!/open|closed|km|mi|star|review|hour/i.test(next)) {
+              out.category = next.replace(/^·\s*/, "").replace(/\s*·\s*$/, "");
+              break;
+            }
+          }
+        }
+      }
     }
 
-    // Website link (sometimes available)
-    const websiteLink = card.querySelector('a[data-value="Website"], a[aria-label*="Website" i]');
+    // Website link
+    const websiteLink = card.querySelector(
+      'a[data-value="Website"], a[aria-label*="Website" i], a[data-tooltip*="website" i]'
+    );
     if (websiteLink) out.website = websiteLink.href;
 
     // Hours
-    const hoursMatch = allText.match(/(open|closed|opens|closes)[^\n]*/i);
+    const hoursMatch = allText.match(/(open|closed|opens|closes)\s*[·⋅:]?\s*[^\n]*/i);
     if (hoursMatch) out.hours = hoursMatch[0].trim();
 
     out.scrapedAt = new Date().toISOString();
@@ -200,78 +275,127 @@
   async function openPlaceDetail(card) {
     const link = card.querySelector('a[href*="/maps/place/"]');
     if (!link) return null;
+    link.scrollIntoView({ behavior: "instant", block: "center" });
+    await sleep(200);
     link.click();
     // Wait for detail panel to load
-    await sleep(1200);
+    await sleep(1800);
     return await extractDetailPanel();
   }
 
   async function extractDetailPanel() {
     const out = {};
-    // Wait for panel to render
+    // Wait for panel to render — try multiple heading selectors
     let attempts = 0;
-    while (attempts < 8) {
-      const heading = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"]');
+    while (attempts < 12) {
+      const heading = document.querySelector(
+        'h1.DUwDvf, h1.fontHeadlineLarge, h1[class*="fontHeadlineLarge"], div.lMbq3e h1, div.tAiQdd h1'
+      );
       if (heading) break;
-      await sleep(400);
+      await sleep(500);
       attempts++;
     }
 
-    // Title
-    const heading = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"], h1');
+    // Title — multiple selectors for different Maps versions
+    const heading = document.querySelector(
+      'h1.DUwDvf, h1.fontHeadlineLarge, h1[class*="fontHeadlineLarge"], div.lMbq3e h1, div.tAiQdd h1, h1'
+    );
     if (heading) out.title = heading.textContent.trim();
 
     // URL
     out.url = location.href;
 
-    // Rating
-    const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"], span.ceNzKf');
+    // Rating — multiple approaches
+    let ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
+    if (!ratingEl) ratingEl = document.querySelector('span.ceNzKf, div.F7nice span, span.MW4etd');
     if (ratingEl) {
       const r = parseFloat(ratingEl.textContent);
-      if (r) out.rating = r;
+      if (r && r > 0 && r <= 5) out.rating = r;
     }
 
-    // Review count
-    const reviewEl = document.querySelector('button[jsaction*="reviewChart"] span, span.UY7F9');
+    // Review count — multiple approaches
+    let reviewEl = document.querySelector('button[jsaction*="reviewChart"] span');
+    if (!reviewEl) reviewEl = document.querySelector('span.UY7F9, div.F7nice span:last-child');
     if (reviewEl) {
-      const m = reviewEl.textContent.match(/(\d[\d,]*)/);
+      const text = reviewEl.textContent || "";
+      const m = text.match(/(\d[\d,]*)/);
       if (m) out.reviewCount = parseInt(m[1].replace(/,/g, ""));
     }
 
     // Category
-    const catEl = document.querySelector('button[jsaction*="category"], .DkEaL');
+    let catEl = document.querySelector('button[jsaction*="category"], .DkEaL');
+    if (!catEl) catEl = document.querySelector('.mgr77e button, span.DkEaL, div.skqShb span');
     if (catEl) out.category = catEl.textContent.trim();
 
-    // Action buttons (modern selectors)
-    const buttons = document.querySelectorAll('button[data-item-id], a[data-item-id]');
+    // Data items (phone, address, website, hours) — works with data-item-id
+    const buttons = document.querySelectorAll(
+      'button[data-item-id], a[data-item-id], div[data-item-id]'
+    );
     buttons.forEach(btn => {
-      const id = btn.getAttribute("data-item-id") || "";
+      const id = (btn.getAttribute("data-item-id") || "").toLowerCase();
       const aria = btn.getAttribute("aria-label") || "";
       const text = btn.textContent.trim();
 
-      if (id.includes("phone") || id.startsWith("phone:tel:") || aria.toLowerCase().includes("phone")) {
+      // Phone
+      if (id.includes("phone") || id.startsWith("phone:") || aria.toLowerCase().includes("phone")) {
         const m = (aria + " " + text).match(/\+?[\d][\d\s\-().]{7,}\d/);
         if (m) out.phone = m[0].trim();
       }
-      if (id === "address" || aria.toLowerCase().includes("address")) {
-        out.address = text || aria.replace(/^address[: ]/i, "").trim();
+      // Address
+      if (id === "address" || id.includes("address") || aria.toLowerCase().includes("address")) {
+        const addr = text || aria.replace(/^address[: ]*/i, "").trim();
+        if (addr.length > 3) out.address = addr;
       }
-      if (id === "authority" || aria.toLowerCase().includes("website")) {
-        out.website = btn.href || btn.getAttribute("data-url") || "";
+      // Website
+      if (id === "authority" || id.includes("website") || aria.toLowerCase().includes("website")) {
+        const href = btn.href || btn.getAttribute("data-url") || "";
+        if (href && href.startsWith("http")) out.website = href;
+        else if (text && text.includes(".")) out.website = "https://" + text.replace(/^https?:\/\//, "");
       }
-      if (id.startsWith("oh") || aria.toLowerCase().includes("hours")) {
+      // Hours
+      if (id.startsWith("oh") || id.includes("hour") || aria.toLowerCase().includes("hours")) {
         out.hours = text.split("\n")[0];
       }
-      if (id === "plus_code") out.plusCode = text;
+      // Plus code
+      if (id === "plus_code" || id.includes("plus")) out.plusCode = text;
     });
 
-    // Fallback: search for tel:/mailto: links anywhere
+    // Fallback for phone: look for clickable phone elements
     if (!out.phone) {
       const tel = document.querySelector('a[href^="tel:"]');
       if (tel) out.phone = tel.href.replace(/^tel:/, "").trim();
     }
+    // Fallback for phone: aria-label with phone pattern
+    if (!out.phone) {
+      const phoneBtn = document.querySelector('[data-tooltip*="phone" i], [aria-label*="phone" i]');
+      if (phoneBtn) {
+        const lbl = phoneBtn.getAttribute("aria-label") || phoneBtn.textContent || "";
+        const m = lbl.match(/\+?[\d][\d\s\-().]{7,}\d/);
+        if (m) out.phone = m[0].trim();
+      }
+    }
+
+    // Fallback for website: look in info section
+    if (!out.website) {
+      const webLinks = document.querySelectorAll('a[data-item-id="authority"], a[href*="://"][target="_blank"]');
+      for (const wl of webLinks) {
+        const href = wl.href || "";
+        if (href && !href.includes("google.com") && !href.includes("gstatic") && href.startsWith("http")) {
+          out.website = href;
+          break;
+        }
+      }
+    }
+
+    // Fallback for address: look in the panel text
+    if (!out.address) {
+      const addrEl = document.querySelector('[data-item-id="address"] .Io6YTe, [data-item-id="address"] .rogA2c');
+      if (addrEl) out.address = addrEl.textContent.trim();
+    }
+
+    // Email from mailto links
     const mailto = document.querySelector('a[href^="mailto:"]');
-    if (mailto) out.email = mailto.href.replace(/^mailto:/, "").trim();
+    if (mailto) out.email = mailto.href.replace(/^mailto:/, "").split("?")[0].trim();
 
     // Domain
     if (out.website) {
@@ -279,28 +403,36 @@
     }
 
     // Coordinates (from URL)
-    const m = location.href.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/);
-    if (m) {
-      out.latitude = parseFloat(m[1]);
-      out.longitude = parseFloat(m[2]);
+    const coordMatch = location.href.match(/@(-?[\d.]+),(-?[\d.]+)/);
+    if (coordMatch) {
+      out.latitude = parseFloat(coordMatch[1]);
+      out.longitude = parseFloat(coordMatch[2]);
+    } else {
+      const m = location.href.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/);
+      if (m) {
+        out.latitude = parseFloat(m[1]);
+        out.longitude = parseFloat(m[2]);
+      }
     }
 
     out.scrapedAt = new Date().toISOString();
     return out;
   }
 
-  // Scroll the results feed
+  // Scroll the results feed — improved patience & end detection
   async function scrollResults(container, settings) {
-    const maxScrolls = settings.searchScroll || 25;
-    const waitMs = (settings.profileWait || 2) * 250; // shorter for scroll
+    const maxScrolls = settings.searchScroll || 40;
+    const baseWaitMs = 800; // base wait between scrolls
 
     let lastHeight = container.scrollHeight;
+    let lastCardCount = 0;
     let scrollCount = 0;
     let stuckCount = 0;
+    const MAX_STUCK = 6; // more patience — Google Maps lazy-loads slowly
 
     while (scrollCount < maxScrolls && !SHOULD_STOP) {
       // Check CAPTCHA periodically
-      if (scrollCount % 5 === 0) {
+      if (scrollCount % 7 === 0) {
         const cap = detectCaptcha();
         if (cap.detected) {
           await handleCaptcha(cap);
@@ -308,49 +440,112 @@
         }
       }
 
-      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-      await sleep(randomDelay(waitMs));
+      // Scroll using multiple strategies for reliability
+      try {
+        // Strategy 1: scrollTop increment (most reliable)
+        container.scrollTop = container.scrollHeight;
+      } catch (_) {}
+      try {
+        // Strategy 2: scrollTo smooth
+        container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+      } catch (_) {}
+      try {
+        // Strategy 3: scrollIntoView on last element
+        const lastChild = container.lastElementChild;
+        if (lastChild) lastChild.scrollIntoView({ behavior: "smooth", block: "end" });
+      } catch (_) {}
+
+      // Dynamic wait — longer when stuck, shorter when loading fast
+      const waitMs = stuckCount > 2 ? baseWaitMs * 2 : randomDelay(baseWaitMs);
+      await sleep(waitMs);
       scrollCount++;
 
       const newHeight = container.scrollHeight;
       const cards = container.querySelectorAll('a[href*="/maps/place/"]');
+      const currentCardCount = cards.length;
 
       await setProgress({
         isRunning: true,
         title: "Scrolling Maps results...",
         currentPage: scrollCount,
         totalPages: maxScrolls,
-        currentItem: `Found ${cards.length} businesses so far`,
-        totalFound: cards.length
+        currentItem: `Found ${currentCardCount} businesses so far`,
+        totalFound: currentCardCount
       });
 
-      // Check for "end of list" indicator
-      const endText = container.innerText || "";
-      if (endText.includes("You've reached the end") || endText.toLowerCase().includes("no more")) {
-        showToast("Reached end of results");
+      // Check for "end of list" indicator — multiple patterns
+      const endDetected = checkEndOfResults(container);
+      if (endDetected) {
+        showToast(`Reached end of results (${currentCardCount} found)`);
         break;
       }
 
-      if (newHeight === lastHeight) {
+      // Determine if we're stuck
+      if (newHeight === lastHeight && currentCardCount === lastCardCount) {
         stuckCount++;
-        if (stuckCount >= 3) break; // No more results loading
+        if (stuckCount >= MAX_STUCK) {
+          // One final attempt: click "More results" button if present
+          const moreBtn = container.querySelector('button[jsaction*="more"], button[aria-label*="more" i]');
+          if (moreBtn) {
+            moreBtn.click();
+            await sleep(2000);
+            stuckCount = 0; // Reset after clicking more
+          } else {
+            showToast(`No more results loading (${currentCardCount} found)`);
+            break;
+          }
+        }
+        // Extra wait when stuck — give Maps time to lazy-load
+        if (stuckCount >= 3) await sleep(1500);
       } else {
         stuckCount = 0;
       }
       lastHeight = newHeight;
+      lastCardCount = currentCardCount;
     }
   }
 
-  // Extract all visible cards from feed
+  // Detect end of results in Google Maps feed
+  function checkEndOfResults(container) {
+    // Check the visible text for end indicators
+    const text = container.innerText || "";
+    const endPhrases = [
+      "you've reached the end",
+      "no more results",
+      "end of list",
+      "no results found"
+    ];
+    const lowerText = text.toLowerCase();
+    for (const phrase of endPhrases) {
+      if (lowerText.includes(phrase)) return true;
+    }
+    // Check for the specific "end" element Google Maps shows
+    const endEl = container.querySelector(
+      'span.HlvSq, p.fontBodyMedium[style*="end"], div.m6QErb + div, div.PbZDve'
+    );
+    if (endEl && endEl.textContent.toLowerCase().includes("end")) return true;
+    return false;
+  }
+
+  // Extract all visible cards from feed — improved dedup and detection
   function getAllCards(container) {
+    // Multiple selectors to find place cards
     const links = container.querySelectorAll('a[href*="/maps/place/"]');
     const cards = [];
     const seen = new Set();
     links.forEach(link => {
-      // Find the card wrapper (parent with clickable area)
-      let card = link.closest('div[jsaction], div[role="article"]') || link.parentElement;
-      if (card && !seen.has(link.href)) {
-        seen.add(link.href);
+      const href = link.href;
+      if (seen.has(href)) return;
+      seen.add(href);
+
+      // Find the card wrapper — try multiple parent patterns
+      let card = link.closest('div[jsaction][class*="hfpxzc"]')  // modern cards
+        || link.closest('div[role="article"]')
+        || link.closest('div.Nv2PK')  // 2024 card class
+        || link.closest('div[jsaction]')
+        || link.parentElement;
+      
+      if (card) {
         cards.push({ card, link });
       }
     });
@@ -372,7 +567,7 @@
       "targetLeads", "searchScroll", "profileWait",
       "deepEnrich", "fields", "savedKeywords", "savedLocations"
     ]);
-    const target = settings.targetLeads || 100;
+    const target = settings.targetLeads || 500;
 
     showToast("Starting Maps scrape...", "#2563eb");
 
@@ -384,8 +579,16 @@
       return { ok: false, captcha: true };
     }
 
-    // 2. Find results sidebar
-    const container = findResultsContainer();
+    // 2. Find results sidebar — with retry logic
+    let container = null;
+    let retryFind = 0;
+    while (!container && retryFind < 5) {
+      container = findResultsContainer();
+      if (!container) {
+        retryFind++;
+        await sleep(2000); // Wait for Maps to fully render
+      }
+    }
     if (!container) {
       showToast("Maps results sidebar not found. Make sure search results are visible.", "#dc2626");
       CAMPAIGN_RUNNING = false;
@@ -415,14 +618,15 @@
     showToast(`Found ${cards.length} businesses, extracting data...`, "#2563eb");
 
     let totalSaved = 0;
-    const profileWaitMs = (settings.profileWait || 7) * 1000;
+    let totalFailed = 0;
+    const profileWaitMs = (settings.profileWait || 5) * 1000;
 
     // 5. For each card, click to open detail and extract
     for (let i = 0; i < cards.length && i < target; i++) {
       if (SHOULD_STOP) break;
 
-      // CAPTCHA check every 10 profiles
-      if (i % 10 === 0) {
+      // CAPTCHA check every 8 profiles
+      if (i > 0 && i % 8 === 0) {
         const c = detectCaptcha();
         if (c.detected) {
           await handleCaptcha(c);
@@ -436,28 +640,68 @@
         currentPage: i + 1,
         totalPages: Math.min(cards.length, target),
         totalFound: totalSaved,
-        currentItem: `Profile ${i + 1}/${cards.length}`
+        currentItem: `Profile ${i + 1}/${Math.min(cards.length, target)}`
       });
 
       try {
-        // Click the link
-        cards[i].link.click();
+        // Click the link to open profile detail
+        const link = cards[i].link;
+
+        // Scroll the card into view first (important for off-screen cards)
+        link.scrollIntoView({ behavior: "instant", block: "center" });
+        await sleep(300);
+
+        // Click using multiple strategies
+        try { link.click(); } catch (_) {}
+        // Backup: dispatch click event
+        try {
+          link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        } catch (_) {}
+
+        // Wait for detail panel to load — adaptive wait
         await sleep(randomDelay(profileWaitMs));
+
+        // Verify panel loaded (heading appeared)
+        const heading = document.querySelector(
+          'h1.DUwDvf, h1.fontHeadlineLarge, h1[class*="fontHeadlineLarge"], div.lMbq3e h1, div.tAiQdd h1'
+        );
+        if (!heading) {
+          // Extra wait if panel didn't load yet
+          await sleep(2000);
+        }
 
         // Extract from detail panel
         const data = await extractDetailPanel();
         if (data && data.title) {
           const added = await saveLead(data);
           if (added) totalSaved++;
+        } else {
+          totalFailed++;
         }
       } catch (e) {
         console.warn("[Maps] Failed to extract profile:", e);
+        totalFailed++;
       }
+
+      // Go back to results list for next profile
+      // Press the back button in Maps (the arrow at top-left)
+      try {
+        const backBtn = document.querySelector(
+          'button[aria-label="Back"], button[jsaction*="back"], button.hYBOP'
+        );
+        if (backBtn) {
+          backBtn.click();
+          await sleep(800);
+        }
+      } catch (_) {}
 
       // Track for account rotation
       try {
         await chrome.runtime.sendMessage({ type: "ACCOUNT_LEADS_INCREMENT", count: 1 });
       } catch (_) {}
+
+      // Small random extra delay between profiles (anti-detection)
+      if (i % 3 === 0) await sleep(randomDelay(500));
     }
 
     await setProgress({
@@ -584,10 +828,18 @@
     }
 
     if (autoScrape && isMapsPage()) {
-      // Wait a moment for Maps to fully load
+      // Wait for Maps to fully load (DOM + results panel)
       setTimeout(async () => {
-        await runMapsCampaign();
-      }, 2000);
+        // Extra wait: make sure the results panel is available
+        let waitCount = 0;
+        while (!findResultsContainer() && waitCount < 10) {
+          await sleep(1500);
+          waitCount++;
+        }
+        if (findResultsContainer()) {
+          await runMapsCampaign();
+        }
+      }, 3000);
     }
   })();
 
