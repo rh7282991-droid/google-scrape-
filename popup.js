@@ -467,6 +467,38 @@ $("exportCsv").addEventListener("click", async () => {
   setStatus(res && res.ok ? "CSV exported to Downloads." : "Nothing to export.");
 });
 
+$("exportTsv").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) { setStatus("Nothing to export."); return; }
+  const keys = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain"];
+  const header = keys.join("\t");
+  const rows = leads.map(l => keys.map(k => (l[k] != null ? String(l[k]) : "")).join("\t"));
+  const tsv = [header, ...rows].join("\n");
+  const blob = new Blob([tsv], { type: "text/tab-separated-values" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `maps-leads-${new Date().toISOString().slice(0, 10)}.tsv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  setStatus("TSV exported (Google Sheets compatible).");
+});
+
+$("copySheets").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) { setStatus("Nothing to copy."); return; }
+  const keys = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain"];
+  const header = keys.join("\t");
+  const rows = leads.map(l => keys.map(k => (l[k] != null ? String(l[k]) : "")).join("\t"));
+  const tsv = [header, ...rows].join("\n");
+  try {
+    await navigator.clipboard.writeText(tsv);
+    setStatus("Copied! Open Google Sheets → Ctrl+V to paste.");
+  } catch (e) {
+    setStatus("Copy failed. Try again.");
+  }
+});
+
 $("exportJson").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "EXPORT_JSON" });
   setStatus(res && res.ok ? "JSON exported to Downloads." : "Nothing to export.");

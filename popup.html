@@ -271,18 +271,22 @@
       </div>
     </div>
     <div class="card-body">
-      <div class="export-grid">
-        <button id="exportCsv" class="btn-block btn-secondary">
-          <span class="ic">&#128196;</span> CSV
-        </button>
-        <button id="exportJson" class="btn-block btn-secondary">
-          <span class="ic">&#123;&#125;</span> JSON
-        </button>
-      </div>
-      <button id="runDeep" class="btn-block btn-secondary" style="margin-top:8px;">
+      <button id="exportCsv" class="btn-block btn-primary" style="margin-bottom:8px;">
+        <span class="ic">&#128196;</span> Download Excel CSV
+      </button>
+      <button id="exportTsv" class="btn-block btn-primary" style="margin-bottom:8px; background: linear-gradient(135deg, #10b981, #059669);">
+        <span class="ic">&#128203;</span> Download Google Sheets TSV
+      </button>
+      <button id="copySheets" class="btn-block btn-block" style="margin-bottom:8px; background: #0f172a; color: #fff;">
+        <span class="ic">&#128203;</span> Copy to Google Sheets
+      </button>
+      <button id="exportJson" class="btn-block btn-secondary" style="margin-bottom:8px;">
+        <span class="ic">&#123;&#125;</span> Download JSON
+      </button>
+      <button id="runDeep" class="btn-block btn-secondary" style="margin-bottom:8px;">
         <span class="ic">&#128269;</span> Deep-Enrich Websites
       </button>
-      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:8px;">
+      <button id="clear" class="btn-block btn-danger-ghost">
         <span class="ic">&#128465;</span> Clear All Leads
       </button>
     </div>
