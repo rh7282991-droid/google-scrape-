@@ -268,6 +268,48 @@
     return false;
   }
 
+  // Go back to the search results after extracting a place.
+  // This prevents the feed from being destroyed by too many forward navigations.
+  async function goBackToFeed(searchUrl) {
+    // Method 1: Click the back arrow if visible
+    const backBtn = document.querySelector('button[aria-label="Back" i]') ||
+                    document.querySelector('button[jsaction*="back" i]');
+    if (backBtn) {
+      backBtn.click();
+    } else {
+      // Method 2: Use history back
+      history.back();
+    }
+
+    // Wait for feed to reappear (URL changes back to /maps/search/...)
+    const t0 = Date.now();
+    while (Date.now() - t0 < 8000) {
+      if (isSearchPage() && getFeed() && getPlaceCards().length > 0) return true;
+      await sleep(300);
+    }
+    // Method 3: If feed did not return, force navigate
+    if (!isSearchPage() || !getFeed()) {
+      if (searchUrl) {
+        location.href = searchUrl;
+        return false; // will reload — resume handles it
+      }
+    }
+    return true;
+  }
+
+  // Keep-alive: ping the service worker every 20 seconds to prevent it from dying
+  let keepAliveTimer = null;
+  function startKeepAlive() {
+    if (keepAliveTimer) return;
+    keepAliveTimer = setInterval(() => {
+      try { chrome.runtime.sendMessage({ type: "BG_PING" }).catch(() => {}); }
+      catch (_) {}
+    }, 20000);
+  }
+  function stopKeepAlive() {
+    if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+  }
+
   async function processCard(card, idx, total, ctx) {
     if (shouldStop()) return;
     await waitWhilePaused();
@@ -275,21 +317,33 @@
     const placeUrl = card.href || "";
     if (placeUrl && RT.seenUrls.has(placeUrl)) return;
 
+    // Remember the search URL so we can return here
+    const searchUrl = location.href;
+
     const waitMs = (ctx.profileWaitSec || 5) * 1000;
     const ok = await clickAndAwaitPlace(card, Math.max(waitMs, 6000));
     if (!ok) {
       await pushLog(`✗ ${idx + 1}/${total}: place did not load`);
+      // Try to go back anyway
+      await goBackToFeed(searchUrl);
+      await sleep(rand(400, 700));
       return;
     }
 
     const data = extractPlace();
     if (!data) {
       await pushLog(`✗ ${idx + 1}/${total}: extraction failed`);
+      await goBackToFeed(searchUrl);
+      await sleep(rand(400, 700));
       return;
     }
 
     const key = (data.name + "|" + (data.phone || "")).toLowerCase();
-    if (RT.seen.has(key)) return;
+    if (RT.seen.has(key)) {
+      await goBackToFeed(searchUrl);
+      await sleep(rand(300, 500));
+      return;
+    }
     RT.seen.add(key);
     if (placeUrl) RT.seenUrls.add(placeUrl);
 
@@ -309,6 +363,11 @@
                  (data.address ? `  📍 ${data.address.slice(0, 40)}` : "");
     await pushLog(`+ ${idx + 1}/${total}: ${data.name}${tail}`);
     await recountStats();
+
+    // ★ GO BACK to feed for next card
+    const returned = await goBackToFeed(searchUrl);
+    if (!returned) return; // page will reload, resume handles it
+    await sleep(rand(400, 800));
   }
 
   async function processTask(task) {
@@ -338,25 +397,36 @@
     }
 
     await pushLog(`Found ${total} cards. Visiting each...`);
-    const cards = getPlaceCards();
-    const max = Math.min(cards.length, RT.config.maxPerSearch || 50);
 
+    // We process cards by index because DOM references may become stale after back()
+    const max = Math.min(total, RT.config.maxPerSearch || 50);
     for (let i = 0; i < max; i++) {
       if (shouldStop()) break;
       if (RT.collected >= RT.target) break;
       await waitWhilePaused();
-      await processCard(cards[i], i, max, {
+
+      // Re-fetch cards fresh after each back navigation
+      const freshCards = getPlaceCards();
+      if (i >= freshCards.length) {
+        await pushLog(`⚠ Card ${i + 1} no longer in DOM, skipping remainder`);
+        break;
+      }
+      const card = freshCards[i];
+      // Skip already-visited URLs
+      if (card.href && RT.seenUrls.has(card.href)) continue;
+
+      await processCard(card, i, max, {
         keyword: task.keyword,
         location: task.location,
         profileWaitSec: RT.config.profileWaitSec
       });
-      await sleep(rand(250, 500));
     }
     return true;
   }
 
   async function runEngine() {
     RT.status = "running";
+    startKeepAlive();
     await saveState({ status: "running", target: RT.target, logs: [] });
     await pushLog(`Campaign started — target ${RT.target}, ${RT.queue.length} tasks`);
 
@@ -370,6 +440,7 @@
     }
 
     RT.status = shouldStop() ? "stopped" : "idle";
+    stopKeepAlive();
     await saveState({ status: RT.status });
     await pushLog(RT.collected >= RT.target
       ? `✓ Target reached (${RT.collected})`

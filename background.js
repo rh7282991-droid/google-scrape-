@@ -1,5 +1,6 @@
 // background.js — service worker.
 // Initializes default storage, ensures content.js is injected when needed.
+// Uses chrome.alarms to keep itself alive during long scraping sessions.
 
 const DEFAULT_STATE = {
   status: "idle",
@@ -15,14 +16,28 @@ chrome.runtime.onInstalled.addListener(async () => {
   const cur = await chrome.storage.local.get(["leads", "state"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
   if (!cur.state) await chrome.storage.local.set({ state: DEFAULT_STATE });
+  // Create keep-alive alarm (fires every 25 sec to prevent SW death)
+  chrome.alarms.create("keepAlive", { periodInMinutes: 0.4 });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  // Reset transient run-state if browser restarted
   await chrome.storage.local.set({
     state: { ...DEFAULT_STATE, logs: ["Browser restarted — previous run discarded."] }
   });
   await chrome.storage.local.remove(["gmsQueue", "gmsActive", "gmsConfig", "gmsTarget", "activeTask"]);
+  chrome.alarms.create("keepAlive", { periodInMinutes: 0.4 });
+});
+
+// Keep-alive alarm handler — just touch storage to stay awake
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === "keepAlive") {
+    // Check if a run is active; if not, clear the alarm to save resources
+    const { state } = await chrome.storage.local.get(["state"]);
+    if (state && (state.status === "running" || state.status === "paused")) {
+      // Stay alive — do nothing, the alarm firing is enough
+    }
+    // Otherwise let it run anyway (low cost)
+  }
 });
 
 // Inject content.js when an existing Maps tab needs it
