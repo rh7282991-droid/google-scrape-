@@ -1,44 +1,45 @@
 // ============================================
-// Google Lead Scraper Pro — popup controller
+// Maps Lead Scraper Pro — popup controller
 // ============================================
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
 
-const ALL_FIELDS = ["title", "url", "description", "domain", "emails", "phones", "position", "query"];
+// Maps-specific fields
+const ALL_FIELDS = ["title", "phone", "email", "website", "address", "category",
+  "rating", "reviewCount", "hours", "domain", "latitude", "url"];
 const DEFAULT_FIELDS = {
-  title: true, url: true, description: true, domain: true,
-  emails: true, phones: true, position: false, query: false
+  title: true, phone: true, email: true, website: true,
+  address: true, category: true, rating: true, reviewCount: true,
+  hours: false, domain: false, latitude: false, url: false
 };
 
-// ===== Location DB (Feature 16) =====
+// ===== Location DB =====
 const LOCATION_NEIGHBORHOODS = {
   "dhaka": ["Dhanmondi", "Gulshan", "Mirpur", "Uttara", "Banani", "Mohammadpur", "Bashundhara", "Tejgaon", "Motijheel", "Wari", "Badda", "Rampura", "Khilgaon"],
   "chittagong": ["Agrabad", "Nasirabad", "Halishahar", "Patenga", "Kotwali", "GEC Circle", "Oxygen", "Khulshi"],
-  "sylhet": ["Zindabazar", "Amberkhana", "Uposhahar", "Shibganj", "Tilagarh", "Shahjalal Uposhahar"],
+  "sylhet": ["Zindabazar", "Amberkhana", "Uposhahar", "Shibganj", "Tilagarh"],
   "rajshahi": ["Shaheb Bazar", "Sapura", "Kazla", "Uposhahar", "Talaimari"],
   "khulna": ["Sonadanga", "Boyra", "Khalishpur", "Daulatpur", "Gollamari"],
   "new york": ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island", "Harlem", "Williamsburg", "SoHo"],
-  "london": ["Westminster", "Camden", "Shoreditch", "Soho", "Brixton", "Hackney", "Kensington", "Notting Hill"],
+  "london": ["Westminster", "Camden", "Shoreditch", "Soho", "Brixton", "Hackney", "Kensington"],
   "dubai": ["Downtown", "Deira", "Bur Dubai", "Jumeirah", "Marina", "Al Barsha", "Business Bay"],
   "mumbai": ["Andheri", "Bandra", "Colaba", "Dadar", "Juhu", "Powai", "Worli", "Malad"],
   "delhi": ["Connaught Place", "Karol Bagh", "Lajpat Nagar", "Hauz Khas", "Dwarka", "Rohini", "Saket"],
   "kolkata": ["Salt Lake", "Park Street", "New Town", "Ballygunge", "Howrah", "Jadavpur"],
-  "karachi": ["Clifton", "DHA", "Gulshan-e-Iqbal", "Saddar", "Korangi", "North Nazimabad"],
-  "lahore": ["Gulberg", "DHA", "Model Town", "Johar Town", "Liberty", "Anarkali"],
-  "singapore": ["Orchard", "Marina Bay", "Bugis", "Chinatown", "Little India", "Sentosa", "Jurong"],
+  "karachi": ["Clifton", "DHA", "Gulshan-e-Iqbal", "Saddar", "Korangi"],
+  "lahore": ["Gulberg", "DHA", "Model Town", "Johar Town", "Liberty"],
+  "singapore": ["Orchard", "Marina Bay", "Bugis", "Chinatown", "Little India", "Sentosa"],
   "bangkok": ["Sukhumvit", "Silom", "Chatuchak", "Thonglor", "Pratunam", "Siam"],
   "toronto": ["Downtown", "Scarborough", "North York", "Etobicoke", "Mississauga"],
-  "los angeles": ["Hollywood", "Santa Monica", "Beverly Hills", "Downtown LA", "Venice", "Pasadena"],
+  "los angeles": ["Hollywood", "Santa Monica", "Beverly Hills", "Downtown LA", "Venice"],
   "chicago": ["Loop", "Lincoln Park", "Wicker Park", "Hyde Park", "River North"],
-  "sydney": ["CBD", "Bondi", "Surry Hills", "Parramatta", "Manly", "Newtown"],
-  "melbourne": ["CBD", "Fitzroy", "St Kilda", "South Yarra", "Richmond", "Carlton"]
+  "sydney": ["CBD", "Bondi", "Surry Hills", "Parramatta", "Manly"],
+  "melbourne": ["CBD", "Fitzroy", "St Kilda", "South Yarra", "Richmond"]
 };
 
 // ===== Utilities =====
-function setStatus(msg) {
-  statusEl.textContent = msg;
-}
+function setStatus(msg) { statusEl.textContent = msg; }
 
 function setStatusBadge(state) {
   const badge = $("statusBadge");
@@ -52,7 +53,6 @@ function setStatusBadge(state) {
 async function refreshCounts() {
   const { leads = [], todayLeadCount = 0, lifetimeQuota = 300 } =
     await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
-
   $("totalCount").textContent = leads.length;
   $("totalLeadsHeader").textContent = leads.length;
   $("previewCount").textContent = leads.length;
@@ -68,13 +68,12 @@ async function getActiveTab() {
 // ===== Settings =====
 async function loadSettings() {
   const s = await chrome.storage.local.get([
-    "autoScrape", "autoNext", "deepEnrich", "autoMaxPages", "fields",
+    "autoScrape", "deepEnrich", "autoMaxPages", "fields",
     "profileWait", "targetLeads", "searchScroll",
     "randomDelay", "captchaDetect", "autoResume",
     "savedKeywords", "savedLocations"
   ]);
   $("autoScrape").checked = !!s.autoScrape;
-  $("autoNext").checked = !!s.autoNext;
   $("deepEnrich").checked = !!s.deepEnrich;
   $("autoMaxPages").value = s.autoMaxPages || 50;
   $("profileWait").value = s.profileWait || 7;
@@ -105,7 +104,6 @@ async function saveFields() {
   await chrome.storage.local.set({ fields });
 }
 
-// ===== Input counts =====
 function updateInputCounts() {
   const kw = $("searchInput").value.trim().split("\n").filter(Boolean);
   const lc = $("locationInput").value.trim().split("\n").filter(Boolean);
@@ -123,9 +121,7 @@ $("pasteKeywords").addEventListener("click", async () => {
       saveSetting("savedKeywords", text);
       setStatus("Keywords pasted from clipboard.");
     }
-  } catch (e) {
-    setStatus("Clipboard access denied.");
-  }
+  } catch (e) { setStatus("Clipboard access denied."); }
 });
 
 $("pasteLocations").addEventListener("click", async () => {
@@ -138,12 +134,9 @@ $("pasteLocations").addEventListener("click", async () => {
       expandLocationFromTextarea();
       setStatus("Locations pasted from clipboard.");
     }
-  } catch (e) {
-    setStatus("Clipboard access denied.");
-  }
+  } catch (e) { setStatus("Clipboard access denied."); }
 });
 
-// Auto-save inputs
 $("searchInput").addEventListener("input", () => {
   updateInputCounts();
   saveSetting("savedKeywords", $("searchInput").value);
@@ -153,7 +146,6 @@ $("locationInput").addEventListener("input", () => {
   saveSetting("savedLocations", $("locationInput").value);
 });
 
-// Reset campaign
 $("clearCampaign").addEventListener("click", async () => {
   if (!confirm("Clear keywords and locations?")) return;
   $("searchInput").value = "";
@@ -164,21 +156,20 @@ $("clearCampaign").addEventListener("click", async () => {
   setStatus("Campaign inputs cleared.");
 });
 
-// ===== Live Preview Table (Feature 14) =====
+// ===== Live Preview Table =====
 async function renderPreviewTable() {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
   const tbody = $("previewBody");
-
   if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start Scraping" above.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
     return;
   }
   const last10 = leads.slice(-10).reverse();
   tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "\u2014").slice(0, 24);
-    const phone = (lead.phones && lead.phones.length) ? lead.phones[0].slice(0, 14) : "\u2014";
-    const email = (lead.emails && lead.emails.length) ? lead.emails[0].split("@")[0].slice(0, 12) : "\u2014";
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td>${email}</td></tr>`;
+    const name = (lead.title || "\u2014").slice(0, 22);
+    const phone = (lead.phone || "\u2014").slice(0, 14);
+    const addr = (lead.address || "\u2014").slice(0, 20);
+    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
   }).join("");
 }
 
@@ -191,17 +182,13 @@ function setupCollapsibles() {
   });
 }
 
-// ===== Search Suggestions (Feature 15) =====
+// ===== Search Suggestions =====
 let suggestTimeout = null;
-
 $("searchInput").addEventListener("input", (e) => {
   clearTimeout(suggestTimeout);
   const lines = e.target.value.split("\n");
   const lastLine = lines[lines.length - 1].trim();
-  if (lastLine.length < 2) {
-    hideSuggest();
-    return;
-  }
+  if (lastLine.length < 2) { hideSuggest(); return; }
   suggestTimeout = setTimeout(() => fetchSuggestions(lastLine), 350);
 });
 
@@ -231,19 +218,15 @@ function showSuggest(items, onClick) {
     li.addEventListener("click", () => onClick(items[i]));
   });
 }
-
 function hideSuggest() {
   $("suggestWrap").style.display = "none";
   $("suggestList").innerHTML = "";
 }
-
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".suggest-overlay") && !e.target.matches("textarea")) {
-    hideSuggest();
-  }
+  if (!e.target.closest(".suggest-overlay") && !e.target.matches("textarea")) hideSuggest();
 });
 
-// ===== Location Auto-Expand (Feature 16) =====
+// ===== Location Auto-Expand =====
 let locationTimeout = null;
 $("locationInput").addEventListener("input", () => {
   clearTimeout(locationTimeout);
@@ -275,7 +258,6 @@ function showLocationChips(items) {
   container.innerHTML = items.slice(0, 12).map(item =>
     `<span class="loc-chip" data-area="${item.area}" data-city="${item.city}">${item.area} <span class="remove">\u00d7</span></span>`
   ).join("");
-
   container.querySelectorAll(".loc-chip").forEach(chip => {
     chip.addEventListener("click", (e) => {
       if (e.target.classList.contains("remove")) {
@@ -294,26 +276,22 @@ function showLocationChips(items) {
   });
 }
 
-// ===== Resume Banner (Feature 17) =====
+// ===== Resume Banner =====
 async function checkResumeCampaign() {
   const { campaignState, autoResume } = await chrome.storage.local.get(["campaignState", "autoResume"]);
   if (autoResume === false) return;
   if (campaignState && campaignState.isActive && !campaignState.completed) {
     $("resumeBanner").style.display = "flex";
-    $("resumeInfo").textContent = `${campaignState.leadsCollected || 0} leads, page ${campaignState.currentPage || 0}/${campaignState.totalPages || 0}`;
+    $("resumeInfo").textContent = `${campaignState.leadsCollected || 0} leads, query: "${(campaignState.query || '').slice(0, 30)}"`;
   }
 }
 
 $("resumeYes").addEventListener("click", async () => {
   const { campaignState } = await chrome.storage.local.get(["campaignState"]);
   if (!campaignState) return;
-  await chrome.storage.local.set({
-    autoScrape: true,
-    autoNext: true,
-    autoMaxPages: campaignState.totalPages || 5
-  });
+  await chrome.storage.local.set({ autoScrape: true });
   const tab = await getActiveTab();
-  const url = campaignState.lastUrl || `https://www.google.com/search?q=${encodeURIComponent(campaignState.query || "")}&start=${((campaignState.currentPage || 1) - 1) * 10}`;
+  const url = campaignState.lastUrl || `https://www.google.com/maps/search/${encodeURIComponent(campaignState.query || "")}`;
   if (tab) chrome.tabs.update(tab.id, { url });
   else chrome.tabs.create({ url });
   setStatus("Resuming campaign...");
@@ -328,7 +306,7 @@ $("resumeNo").addEventListener("click", async () => {
   setStatus("Campaign dismissed.");
 });
 
-// ===== CAPTCHA Banner (Feature 4) =====
+// ===== CAPTCHA Banner =====
 let captchaTimer = null;
 async function checkCaptchaCooldown() {
   const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
@@ -382,7 +360,6 @@ function renderProgress(p) {
   $("progPageTotal").textContent = p.totalPages || "?";
   $("progFound").textContent = p.totalFound || 0;
   $("progCurrent").textContent = p.currentItem || "";
-
   const pct = p.totalPages > 0
     ? Math.min(100, Math.round((p.currentPage / p.totalPages) * 100))
     : (p.percent || 0);
@@ -396,13 +373,12 @@ async function pollProgress() {
 }
 
 $("stopBtn").addEventListener("click", async () => {
-  await chrome.storage.local.set({
-    autoScrape: false,
-    autoNext: false,
-    progress: { isRunning: false }
-  });
+  const tab = await getActiveTab();
+  if (tab) {
+    try { await chrome.tabs.sendMessage(tab.id, { type: "STOP_SCRAPE" }); } catch (_) {}
+  }
+  await chrome.storage.local.set({ autoScrape: false, progress: { isRunning: false } });
   $("autoScrape").checked = false;
-  $("autoNext").checked = false;
   $("progressBox").style.display = "none";
   setStatusBadge("ready");
   setStatus("Stopped by user.");
@@ -420,63 +396,60 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.captchaDetected) checkCaptchaCooldown();
 });
 
-// ===== Main: Start Scraping =====
+// ===== MAIN: Start Profile Collection =====
 $("scrapeNow").addEventListener("click", async () => {
   const tab = await getActiveTab();
-  const onGoogle = tab && /^https?:\/\/(www\.)?google\.com\/search/.test(tab.url || "");
+  const onMaps = tab && /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(tab.url || "");
 
-  // Build query if not on Google
-  if (!onGoogle) {
-    const keywords = $("searchInput").value.trim().split("\n").map(k => k.trim()).filter(Boolean);
-    const locations = $("locationInput").value.trim().split("\n").map(l => l.trim()).filter(Boolean);
+  const keywords = $("searchInput").value.trim().split("\n").map(k => k.trim()).filter(Boolean);
+  const locations = $("locationInput").value.trim().split("\n").map(l => l.trim()).filter(Boolean);
 
+  if (!onMaps) {
+    // Build Maps search URL and navigate
     if (!keywords.length) {
       setStatus("Please enter at least one keyword.");
       $("searchInput").focus();
       return;
     }
-
     const query = keywords[0] + (locations.length ? " " + locations[0] : "");
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
-    // Auto-enable auto-scrape so it kicks in once page loads
-    await chrome.storage.local.set({ autoScrape: true, autoNext: true });
+    // Auto-enable auto-scrape so it kicks in after Maps loads
+    await chrome.storage.local.set({ autoScrape: true });
     $("autoScrape").checked = true;
-    $("autoNext").checked = true;
 
     if (tab) chrome.tabs.update(tab.id, { url });
     else chrome.tabs.create({ url });
 
-    setStatus(`Navigating to Google: "${query}"...`);
+    setStatus(`Opening Google Maps: "${query}"...`);
     setStatusBadge("running");
     return;
   }
 
-  // Already on Google — scrape current page
-  setStatus("Scraping current page...");
+  // Already on Maps — start scraping the visible results
+  setStatus("Starting Maps scrape on current page...");
   setStatusBadge("running");
   try {
     const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
-    if (res && !res.captcha) {
-      setStatus(`Found ${res.found} result(s), ${res.added} new saved.`);
+    if (res && res.ok) {
+      setStatus(`Saved ${res.saved || 0} new leads.`);
     } else if (res && res.captcha) {
       setStatus("CAPTCHA detected! Cooldown started.");
       setStatusBadge("paused");
     } else {
-      setStatus("No response. Reload the Google search page.");
+      setStatus(res?.error || "Failed to scrape. Reload Maps.");
+      setStatusBadge("error");
     }
   } catch (e) {
-    setStatus("Could not reach page. Reload the Google tab.");
+    setStatus("Could not reach page. Reload the Maps tab.");
     setStatusBadge("error");
   }
-  setStatusBadge("ready");
   refreshCounts();
   renderPreviewTable();
 });
 
 // ===== Settings listeners =====
 $("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
-$("autoNext").addEventListener("change", (e) => saveSetting("autoNext", e.target.checked));
 $("deepEnrich").addEventListener("change", (e) => saveSetting("deepEnrich", e.target.checked));
 $("autoMaxPages").addEventListener("change", (e) => saveSetting("autoMaxPages", Number(e.target.value) || 50));
 $("profileWait").addEventListener("change", (e) => saveSetting("profileWait", Number(e.target.value)));
@@ -497,9 +470,9 @@ $("runDeep").addEventListener("click", async () => {
   setStatusBadge("running");
   const res = await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" });
   if (res && res.ok) {
-    setStatus(`Deep-scrape complete. Updated ${res.updated} leads.`);
+    setStatus(`Done. Updated ${res.updated} leads.`);
   } else {
-    setStatus(`Deep-scrape failed: ${res?.error || "unknown"}`);
+    setStatus(`Failed: ${res?.error || "unknown"}`);
   }
   setStatusBadge("ready");
   refreshCounts();
@@ -526,11 +499,10 @@ $("clear").addEventListener("click", async () => {
   renderPreviewTable();
 });
 
-// ===== Account Management (Feature 5) =====
+// ===== Account Management =====
 async function renderAccounts() {
   const { accounts = [], activeAccountIndex = 0, accountRotationThreshold = 50 } =
     await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
-
   $("rotationThreshold").value = accountRotationThreshold;
 
   const list = $("accountList");
@@ -545,7 +517,6 @@ async function renderAccounts() {
 
   const active = accounts[activeAccountIndex];
   badge.textContent = active ? active.label.split("@")[0].slice(0, 12) : "None";
-
   $("accountInfo").innerHTML = `<small>Active: <b>${active?.label || "\u2014"}</b> &middot; ${active?.leadsCollected || 0}/${accountRotationThreshold} leads</small>`;
 
   list.innerHTML = accounts.map((acc, i) => {

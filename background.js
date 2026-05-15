@@ -1,11 +1,8 @@
-// background.js — service worker
-// Handles: CSV/JSON export, deep-scrape with live progress
-
-const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+// ============================================
+// Maps Lead Scraper Pro — service worker
+// ============================================
 
 // ----- Export helpers -----
-
 function csvEscape(v) {
   if (v == null) return "";
   const s = String(v).replace(/"/g, '""');
@@ -13,12 +10,14 @@ function csvEscape(v) {
 }
 
 function leadsToCsv(leads) {
-  // Build headers from union of keys present
   const keys = new Set();
   leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
-  // Preferred order
-  const preferred = ["title", "url", "domain", "description", "emails", "phones",
-                     "position", "query", "scrapedAt", "deepScrapedAt"];
+  // Maps-specific preferred order
+  const preferred = [
+    "title", "phone", "email", "website", "address", "category",
+    "rating", "reviewCount", "hours", "domain",
+    "latitude", "longitude", "plusCode", "url", "scrapedAt"
+  ];
   const headers = preferred.filter(k => keys.has(k))
     .concat([...keys].filter(k => !preferred.includes(k)));
 
@@ -38,7 +37,9 @@ function downloadText(text, filename, mime) {
   return chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
 }
 
-// ----- Deep scrape -----
+// ----- Deep enrichment (visit websites for emails) -----
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
 
 function extractContactsFromHtml(html) {
   const text = html
@@ -62,7 +63,6 @@ function extractContactsFromHtml(html) {
       return digits.length >= 8 && digits.length <= 15;
     })
   ));
-
   return { emails, phones };
 }
 
@@ -93,11 +93,14 @@ async function deepScrapeAll() {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
   if (!leads.length) return { ok: false, error: "No leads saved" };
 
+  const enrichable = leads.filter(l => l.website && !l.deepScrapedAt);
+  if (!enrichable.length) return { ok: true, updated: 0, msg: "All leads already enriched" };
+
   await setProgress({
     isRunning: true,
-    title: "Deep-scraping URLs...",
+    title: "Deep-enriching websites...",
     currentPage: 0,
-    totalPages: leads.length,
+    totalPages: enrichable.length,
     totalFound: 0,
     currentItem: ""
   });
@@ -107,22 +110,25 @@ async function deepScrapeAll() {
   let totalContacts = 0;
 
   const BATCH = 3;
-  for (let i = 0; i < leads.length; i += BATCH) {
-    const batch = leads.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (lead, idx) => {
+  for (let i = 0; i < enrichable.length; i += BATCH) {
+    const batch = enrichable.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (lead) => {
       processed++;
       await setProgress({
         currentPage: processed,
-        currentItem: `Visiting: ${lead.domain || lead.url}`
+        currentItem: `Visiting: ${lead.domain || lead.website}`
       });
 
-      if ((lead.emails || []).length && (lead.phones || []).length) return;
-      const html = await fetchPage(lead.url);
+      const html = await fetchPage(lead.website);
       if (!html) return;
       const { emails, phones } = extractContactsFromHtml(html);
-      lead.emails = Array.from(new Set([...(lead.emails || []), ...emails]));
-      lead.phones = Array.from(new Set([...(lead.phones || []), ...phones]));
+
+      if (emails.length && !lead.email) lead.email = emails[0];
+      lead.allEmails = emails;
+      if (phones.length && !lead.phone) lead.phone = phones[0];
+      lead.allPhones = phones;
       lead.deepScrapedAt = new Date().toISOString();
+
       if (emails.length || phones.length) {
         updated++;
         totalContacts += emails.length + phones.length;
@@ -137,7 +143,6 @@ async function deepScrapeAll() {
     isRunning: false,
     currentItem: `Done. ${updated} leads enriched.`
   });
-  // auto-hide after a few seconds
   setTimeout(async () => {
     await chrome.storage.local.set({ progress: { isRunning: false } });
   }, 4000);
@@ -145,68 +150,7 @@ async function deepScrapeAll() {
   return { ok: true, updated };
 }
 
-// ----- Message router -----
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  (async () => {
-    try {
-      if (msg.type === "EXPORT_CSV") {
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
-        if (!leads.length) return sendResponse({ ok: false });
-        const csv = leadsToCsv(leads);
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        await downloadText(csv, `google-leads-${stamp}.csv`, "text/csv");
-        sendResponse({ ok: true });
-      } else if (msg.type === "EXPORT_JSON") {
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
-        if (!leads.length) return sendResponse({ ok: false });
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        await downloadText(JSON.stringify(leads, null, 2), `google-leads-${stamp}.json`, "application/json");
-        sendResponse({ ok: true });
-      } else if (msg.type === "DEEP_SCRAPE_ALL") {
-        const r = await deepScrapeAll();
-        sendResponse(r);
-      } else if (msg.type === "FETCH_SUGGESTIONS") {
-        // Feature 15: Smart Search Suggestions via Google Autocomplete
-        const suggestions = await fetchGoogleSuggestions(msg.query);
-        sendResponse({ suggestions });
-      } else if (msg.type === "SAVE_CAMPAIGN_STATE") {
-        // Feature 17: Save campaign state for resume
-        await chrome.storage.local.set({ campaignState: msg.state });
-        sendResponse({ ok: true });
-      } else if (msg.type === "CAPTCHA_DETECTED") {
-        // Feature 4: CAPTCHA detected - show notification
-        await showCaptchaNotification(msg.info);
-        sendResponse({ ok: true });
-      } else if (msg.type === "ACCOUNT_LEADS_INCREMENT") {
-        // Feature 5: Track per-account leads, rotate at 50
-        const r = await incrementAccountLeads(msg.count || 0);
-        sendResponse(r);
-      } else if (msg.type === "ACCOUNT_FLAGGED") {
-        // Feature 5: Account flagged (e.g., by CAPTCHA) - rotate immediately
-        const r = await rotateAccount("flagged: " + (msg.reason || "unknown"));
-        sendResponse(r);
-      } else if (msg.type === "ADD_ACCOUNT") {
-        // Feature 5: Add a Google account label
-        const r = await addAccount(msg.label);
-        sendResponse(r);
-      } else if (msg.type === "REMOVE_ACCOUNT") {
-        const r = await removeAccount(msg.id);
-        sendResponse(r);
-      } else if (msg.type === "ROTATE_ACCOUNT") {
-        const r = await rotateAccount("manual");
-        sendResponse(r);
-      } else {
-        sendResponse({ ok: false, error: "unknown message" });
-      }
-    } catch (e) {
-      sendResponse({ ok: false, error: String(e && e.message || e) });
-    }
-  })();
-  return true;
-});
-
-// ===== Feature 15: Google Autocomplete Suggestions =====
+// ===== Google Autocomplete =====
 async function fetchGoogleSuggestions(query) {
   if (!query || query.length < 2) return [];
   try {
@@ -217,84 +161,12 @@ async function fetchGoogleSuggestions(query) {
     clearTimeout(t);
     if (!res.ok) return [];
     const data = await res.json();
-    // data format: [query, [suggestions], ...]
-    if (Array.isArray(data) && Array.isArray(data[1])) {
-      return data[1].slice(0, 8);
-    }
+    if (Array.isArray(data) && Array.isArray(data[1])) return data[1].slice(0, 8);
     return [];
-  } catch (_) {
-    return [];
-  }
+  } catch (_) { return []; }
 }
 
-// ===== Feature 17: Monitor tab changes to save campaign state =====
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete") return;
-  if (!tab.url || !/^https?:\/\/(www\.)?google\.com\/search/.test(tab.url)) return;
-
-  const { autoScrape, autoNext, autoMaxPages } = await chrome.storage.local.get(["autoScrape", "autoNext", "autoMaxPages"]);
-  if (!autoScrape && !autoNext) return;
-
-  // Save campaign state for resume
-  const urlObj = new URL(tab.url);
-  const query = urlObj.searchParams.get("q") || "";
-  const start = Number(urlObj.searchParams.get("start") || 0);
-  const currentPage = Math.floor(start / 10) + 1;
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-
-  await chrome.storage.local.set({
-    campaignState: {
-      isActive: true,
-      completed: false,
-      query,
-      currentPage,
-      totalPages: Number(autoMaxPages || 5),
-      leadsCollected: leads.length,
-      lastUrl: tab.url,
-      savedAt: Date.now()
-    }
-  });
-});
-
-// Mark campaign complete when auto-scrape finishes
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local") return;
-  if (changes.autoScrape && changes.autoScrape.newValue === false) {
-    chrome.storage.local.get(["campaignState"]).then(({ campaignState }) => {
-      if (campaignState && campaignState.isActive) {
-        campaignState.completed = true;
-        campaignState.isActive = false;
-        chrome.storage.local.set({ campaignState });
-      }
-    });
-  }
-});
-
-chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields", "accounts"]);
-  if (!cur.leads) await chrome.storage.local.set({ leads: [] });
-  if (!cur.autoMaxPages) await chrome.storage.local.set({ autoMaxPages: 5 });
-  if (!cur.fields) {
-    await chrome.storage.local.set({
-      fields: {
-        title: true, url: true, description: true, domain: true,
-        emails: true, phones: true, position: false, query: false
-      }
-    });
-  }
-  if (!cur.accounts) {
-    await chrome.storage.local.set({
-      accounts: [],
-      activeAccountIndex: 0,
-      accountLeadsCount: 0,
-      accountRotationThreshold: 50
-    });
-  }
-  // Feature 4: Setup alarm to check CAPTCHA cooldown expiry every minute
-  chrome.alarms.create("captcha-cooldown-check", { periodInMinutes: 1 });
-});
-
-// ===== Feature 4: CAPTCHA notification =====
+// ===== CAPTCHA notification =====
 async function showCaptchaNotification(info) {
   const cooldownEnd = new Date(info.cooldownUntil).toLocaleTimeString();
   try {
@@ -305,43 +177,18 @@ async function showCaptchaNotification(info) {
       message: `Taking a 30-min break. Auto-scrape paused. Resume after ${cooldownEnd}.`,
       priority: 2
     });
-  } catch (e) {
-    // Notifications permission may not be granted; fail silently
-    console.warn("[GLS] Notification failed:", e);
-  }
+  } catch (e) { console.warn("[MLS] Notification failed:", e); }
 }
 
-// Auto-clear CAPTCHA cooldown when expired (check every minute)
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === "captcha-cooldown-check") {
-    const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
-    if (captchaDetected && captchaDetected.cooldownUntil <= Date.now()) {
-      await chrome.storage.local.remove(["captchaDetected"]);
-      try {
-        await chrome.notifications.create("cooldown-ended-" + Date.now(), {
-          type: "basic",
-          iconUrl: "icons/icon128.png",
-          title: "Cooldown ended",
-          message: "You can resume scraping now.",
-          priority: 1
-        });
-      } catch (_) {}
-    }
-  }
-});
-
-// ===== Feature 5: Multi-Account Rotation =====
+// ===== Account rotation =====
 async function addAccount(label) {
   if (!label || !label.trim()) return { ok: false, error: "Label required" };
   const { accounts = [] } = await chrome.storage.local.get(["accounts"]);
   const id = "acc_" + Date.now();
   accounts.push({
-    id,
-    label: label.trim(),
-    leadsCollected: 0,
-    flaggedCount: 0,
-    addedAt: Date.now(),
-    lastUsedAt: null
+    id, label: label.trim(),
+    leadsCollected: 0, flaggedCount: 0,
+    addedAt: Date.now(), lastUsedAt: null
   });
   await chrome.storage.local.set({ accounts });
   return { ok: true, account: accounts[accounts.length - 1] };
@@ -361,13 +208,10 @@ async function removeAccount(id) {
 async function incrementAccountLeads(count) {
   if (!count) return { ok: true };
   const {
-    accounts = [],
-    activeAccountIndex = 0,
-    accountRotationThreshold = 50
+    accounts = [], activeAccountIndex = 0, accountRotationThreshold = 50
   } = await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
 
   if (!accounts.length) return { ok: true, hasAccounts: false };
-
   const active = accounts[activeAccountIndex];
   if (!active) return { ok: true };
 
@@ -375,7 +219,6 @@ async function incrementAccountLeads(count) {
   active.lastUsedAt = Date.now();
   await chrome.storage.local.set({ accounts });
 
-  // Check threshold
   if (active.leadsCollected >= accountRotationThreshold) {
     return await rotateAccount(`reached ${accountRotationThreshold} leads`);
   }
@@ -384,41 +227,151 @@ async function incrementAccountLeads(count) {
 
 async function rotateAccount(reason) {
   const { accounts = [], activeAccountIndex = 0 } = await chrome.storage.local.get(["accounts", "activeAccountIndex"]);
-  if (accounts.length < 2) {
-    return { ok: false, error: "Need 2+ accounts to rotate", hasAccounts: accounts.length > 0 };
-  }
+  if (accounts.length < 2) return { ok: false, error: "Need 2+ accounts to rotate" };
 
-  // Mark current as flagged if reason is captcha-related
   if (reason && reason.includes("flagged")) {
     accounts[activeAccountIndex].flaggedCount = (accounts[activeAccountIndex].flaggedCount || 0) + 1;
   }
-
-  // Reset count for current and rotate
   accounts[activeAccountIndex].leadsCollected = 0;
   const nextIndex = (activeAccountIndex + 1) % accounts.length;
 
   await chrome.storage.local.set({
-    accounts,
-    activeAccountIndex: nextIndex,
+    accounts, activeAccountIndex: nextIndex,
     lastRotation: { at: Date.now(), from: accounts[activeAccountIndex].label, to: accounts[nextIndex].label, reason }
   });
 
-  // Notify user
   try {
     await chrome.notifications.create("account-rotated-" + Date.now(), {
-      type: "basic",
-      iconUrl: "icons/icon128.png",
+      type: "basic", iconUrl: "icons/icon128.png",
       title: "Account rotated",
       message: `Switched to "${accounts[nextIndex].label}". Reason: ${reason}.`,
       priority: 1
     });
   } catch (_) {}
-
-  return {
-    ok: true,
-    rotated: true,
-    from: accounts[activeAccountIndex].label,
-    to: accounts[nextIndex].label,
-    reason
-  };
+  return { ok: true, rotated: true, to: accounts[nextIndex].label };
 }
+
+// ===== Message router =====
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  (async () => {
+    try {
+      if (msg.type === "EXPORT_CSV") {
+        const { leads = [] } = await chrome.storage.local.get(["leads"]);
+        if (!leads.length) return sendResponse({ ok: false });
+        const csv = leadsToCsv(leads);
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        await downloadText(csv, `maps-leads-${stamp}.csv`, "text/csv");
+        sendResponse({ ok: true });
+      } else if (msg.type === "EXPORT_JSON") {
+        const { leads = [] } = await chrome.storage.local.get(["leads"]);
+        if (!leads.length) return sendResponse({ ok: false });
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        await downloadText(JSON.stringify(leads, null, 2), `maps-leads-${stamp}.json`, "application/json");
+        sendResponse({ ok: true });
+      } else if (msg.type === "DEEP_SCRAPE_ALL") {
+        sendResponse(await deepScrapeAll());
+      } else if (msg.type === "FETCH_SUGGESTIONS") {
+        sendResponse({ suggestions: await fetchGoogleSuggestions(msg.query) });
+      } else if (msg.type === "CAPTCHA_DETECTED") {
+        await showCaptchaNotification(msg.info);
+        sendResponse({ ok: true });
+      } else if (msg.type === "ACCOUNT_LEADS_INCREMENT") {
+        sendResponse(await incrementAccountLeads(msg.count || 0));
+      } else if (msg.type === "ACCOUNT_FLAGGED") {
+        sendResponse(await rotateAccount("flagged: " + (msg.reason || "unknown")));
+      } else if (msg.type === "ADD_ACCOUNT") {
+        sendResponse(await addAccount(msg.label));
+      } else if (msg.type === "REMOVE_ACCOUNT") {
+        sendResponse(await removeAccount(msg.id));
+      } else if (msg.type === "ROTATE_ACCOUNT") {
+        sendResponse(await rotateAccount("manual"));
+      } else if (msg.type === "OPEN_MAPS") {
+        // Open Google Maps with query
+        const query = msg.query || "";
+        const url = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+        const tab = await getActiveTab();
+        if (tab) chrome.tabs.update(tab.id, { url });
+        else chrome.tabs.create({ url });
+        sendResponse({ ok: true });
+      } else {
+        sendResponse({ ok: false, error: "unknown message" });
+      }
+    } catch (e) {
+      sendResponse({ ok: false, error: String(e?.message || e) });
+    }
+  })();
+  return true;
+});
+
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
+// ===== Campaign state save (Feature 17) =====
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  if (!tab.url || !/^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(tab.url)) return;
+
+  const { autoScrape } = await chrome.storage.local.get(["autoScrape"]);
+  if (!autoScrape) return;
+
+  // Extract query from /maps/search/QUERY
+  const m = tab.url.match(/\/maps\/search\/([^/?]+)/);
+  const query = m ? decodeURIComponent(m[1]) : "";
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+
+  await chrome.storage.local.set({
+    campaignState: {
+      isActive: true, completed: false,
+      query, currentPage: 1,
+      totalPages: 1, leadsCollected: leads.length,
+      lastUrl: tab.url, savedAt: Date.now()
+    }
+  });
+});
+
+// Reset today counter at midnight
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === "midnight-reset") {
+    const today = new Date().toDateString();
+    const { todayLeadDate } = await chrome.storage.local.get(["todayLeadDate"]);
+    if (todayLeadDate !== today) {
+      await chrome.storage.local.set({ todayLeadCount: 0, todayLeadDate: today });
+    }
+  } else if (alarm.name === "captcha-cooldown-check") {
+    const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
+    if (captchaDetected && captchaDetected.cooldownUntil <= Date.now()) {
+      await chrome.storage.local.remove(["captchaDetected"]);
+      try {
+        await chrome.notifications.create("cooldown-ended-" + Date.now(), {
+          type: "basic", iconUrl: "icons/icon128.png",
+          title: "Cooldown ended", message: "You can resume scraping now.", priority: 1
+        });
+      } catch (_) {}
+    }
+  }
+});
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const cur = await chrome.storage.local.get(["leads", "fields", "accounts", "lifetimeQuota"]);
+  if (!cur.leads) await chrome.storage.local.set({ leads: [] });
+  if (!cur.lifetimeQuota) await chrome.storage.local.set({ lifetimeQuota: 300 });
+  if (!cur.fields) {
+    await chrome.storage.local.set({
+      fields: {
+        title: true, phone: true, email: true, website: true,
+        address: true, category: true, rating: true, reviewCount: true
+      }
+    });
+  }
+  if (!cur.accounts) {
+    await chrome.storage.local.set({
+      accounts: [], activeAccountIndex: 0,
+      accountLeadsCount: 0, accountRotationThreshold: 50
+    });
+  }
+  // Setup alarms
+  chrome.alarms.create("captcha-cooldown-check", { periodInMinutes: 1 });
+  chrome.alarms.create("midnight-reset", { periodInMinutes: 60 });
+});

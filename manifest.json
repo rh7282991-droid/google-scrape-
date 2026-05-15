@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Google Lead Scraper Pro",
-  "version": "3.4.1",
-  "description": "Advanced lead scraper for Google Search. CAPTCHA detection, multi-account rotation, smart suggestions, location auto-expand, deep enrichment, resume on failure.",
+  "name": "Maps Lead Scraper Pro",
+  "version": "3.5.0",
+  "description": "Advanced Google Maps lead scraper. Extract business name, phone, address, website, rating, category from Google Maps profiles. CAPTCHA-safe with multi-account rotation.",
   "permissions": [
     "storage",
     "downloads",
@@ -15,6 +15,8 @@
   "host_permissions": [
     "https://www.google.com/*",
     "https://google.com/*",
+    "https://www.google.com/maps/*",
+    "https://maps.google.com/*",
     "https://suggestqueries.google.com/*",
     "<all_urls>"
   ],
@@ -23,7 +25,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Google Lead Scraper Pro",
+    "default_title": "Maps Lead Scraper Pro",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -38,10 +40,10 @@
   "content_scripts": [
     {
       "matches": [
+        "https://www.google.com/maps/*",
+        "https://maps.google.com/*",
         "https://www.google.com/search*",
-        "https://google.com/search*",
-        "https://www.google.com/sorry/*",
-        "https://sorry.google.com/*"
+        "https://www.google.com/sorry/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
