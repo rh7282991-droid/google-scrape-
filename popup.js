@@ -7,11 +7,14 @@ const statusEl = $("status");
 
 // Maps-specific fields
 const ALL_FIELDS = ["title", "phone", "email", "website", "address", "category",
-  "rating", "reviewCount", "hours", "domain", "latitude", "url"];
+  "rating", "reviewCount", "hours", "domain", "latitude", "url",
+  "facebook", "instagram", "twitter", "linkedin", "youtube", "whatsapp", "tiktok"];
 const DEFAULT_FIELDS = {
   title: true, phone: true, email: true, website: true,
   address: true, category: true, rating: true, reviewCount: true,
-  hours: false, domain: false, latitude: false, url: false
+  hours: false, domain: false, latitude: false, url: false,
+  facebook: true, instagram: true, twitter: false, linkedin: false,
+  youtube: false, whatsapp: true, tiktok: false
 };
 
 // ===== Location DB =====
@@ -51,13 +54,13 @@ function setStatusBadge(state) {
 }
 
 async function refreshCounts() {
-  const { leads = [], todayLeadCount = 0, lifetimeQuota = 300 } =
+  const { leads = [], todayLeadCount = 0, lifetimeQuota = 999999 } =
     await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
   $("totalCount").textContent = leads.length;
   $("totalLeadsHeader").textContent = leads.length;
-  $("previewCount").textContent = leads.length;
   $("todayCount").textContent = todayLeadCount;
-  $("quotaLeft").textContent = Math.max(0, lifetimeQuota - leads.length);
+  const left = lifetimeQuota - leads.length;
+  $("quotaLeft").textContent = left > 99999 ? "∞" : Math.max(0, left);
 }
 
 async function getActiveTab() {
@@ -156,22 +159,7 @@ $("clearCampaign").addEventListener("click", async () => {
   setStatus("Campaign inputs cleared.");
 });
 
-// ===== Live Preview Table =====
-async function renderPreviewTable() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  const tbody = $("previewBody");
-  if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
-    return;
-  }
-  const last10 = leads.slice(-10).reverse();
-  tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "\u2014").slice(0, 22);
-    const phone = (lead.phone || "\u2014").slice(0, 14);
-    const addr = (lead.address || "\u2014").slice(0, 20);
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
-  }).join("");
-}
+
 
 // ===== Collapsible Cards =====
 function setupCollapsibles() {
@@ -390,7 +378,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.progress) renderProgress(changes.progress.newValue);
   if (changes.leads) {
     refreshCounts();
-    renderPreviewTable();
   }
   if (changes.accounts || changes.activeAccountIndex) renderAccounts();
   if (changes.captchaDetected) checkCaptchaCooldown();
@@ -445,7 +432,6 @@ $("scrapeNow").addEventListener("click", async () => {
     setStatusBadge("error");
   }
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Settings listeners =====
@@ -476,13 +462,48 @@ $("runDeep").addEventListener("click", async () => {
   }
   setStatusBadge("ready");
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Export =====
 $("exportCsv").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "EXPORT_CSV" });
   setStatus(res && res.ok ? "CSV exported to Downloads." : "Nothing to export.");
+});
+
+$("exportTsv").addEventListener("click", async () => {
+  const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
+  if (!leads.length) { setStatus("Nothing to export."); return; }
+  // Use only fields that exist in the data (dynamic columns)
+  const allPossible = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain", "facebook", "instagram", "twitter", "linkedin", "youtube", "whatsapp", "tiktok"];
+  const keys = allPossible.filter(k => leads.some(l => l[k] != null && l[k] !== ""));
+  const header = keys.join("\t");
+  const rows = leads.map(l => keys.map(k => (l[k] != null ? String(l[k]) : "")).join("\t"));
+  const tsv = [header, ...rows].join("\n");
+  const blob = new Blob([tsv], { type: "text/tab-separated-values" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `google-leads-${new Date().toISOString().slice(0, 19).replace(/[:.]/g, "-")}.tsv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  setStatus("TSV exported (Google Sheets compatible).");
+});
+
+$("copySheets").addEventListener("click", async () => {
+  const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
+  if (!leads.length) { setStatus("Nothing to copy."); return; }
+  // Use only fields that exist in the data (dynamic columns)
+  const allPossible = ["title", "phone", "email", "website", "address", "category", "rating", "reviewCount", "hours", "domain", "facebook", "instagram", "twitter", "linkedin", "youtube", "whatsapp", "tiktok"];
+  const keys = allPossible.filter(k => leads.some(l => l[k] != null && l[k] !== ""));
+  const header = keys.join("\t");
+  const rows = leads.map(l => keys.map(k => (l[k] != null ? String(l[k]) : "")).join("\t"));
+  const tsv = [header, ...rows].join("\n");
+  try {
+    await navigator.clipboard.writeText(tsv);
+    setStatus(`Copied ${leads.length} leads! Open Google Sheets → Ctrl+V to paste.`);
+  } catch (e) {
+    setStatus("Copy failed. Try again.");
+  }
 });
 
 $("exportJson").addEventListener("click", async () => {
@@ -496,7 +517,6 @@ $("clear").addEventListener("click", async () => {
   await chrome.storage.local.remove(["campaignState"]);
   setStatus("All leads cleared.");
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Account Management =====
@@ -565,7 +585,6 @@ $("rotationThreshold").addEventListener("change", async (e) => {
 loadSettings();
 refreshCounts();
 pollProgress();
-renderPreviewTable();
 checkResumeCampaign();
 renderAccounts();
 checkCaptchaCooldown();

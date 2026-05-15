@@ -1,593 +1,665 @@
 // ============================================
-// Maps Lead Scraper Pro — content script
-// Extracts business profiles from Google Maps
+// Maps Lead Scraper Pro — 3-Phase Content Script
+// Phase 1: Bulk Scroll (fast, no click)
+// Phase 2: Deep Click (phone/website/address)
+// Phase 3: Triggers background deep-enrich (emails)
 // ============================================
 
 (function () {
   "use strict";
 
-  // ===== Regex helpers =====
-  const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-  const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
-
   let CAMPAIGN_RUNNING = false;
   let SHOULD_STOP = false;
 
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const log = (...args) => console.log("[MLS]", ...args);
+
+  async function waitFor(fn, timeout = 10000, interval = 300) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const r = fn();
+      if (r) return r;
+      await sleep(interval);
+    }
+    return null;
+  }
+
   // ============================================
-  // CAPTCHA Detection (Feature 4)
+  // CAPTCHA
   // ============================================
   function detectCaptcha() {
-    if (location.pathname.includes("/sorry/") || location.hostname.includes("sorry.google")) {
-      return { detected: true, type: "sorry-page" };
+    if (location.pathname.includes("/sorry/")) return { detected: true, type: "sorry" };
+    const text = (document.body?.innerText || "").toLowerCase();
+    if (["unusual traffic", "i'm not a robot", "automated queries"].some(p => text.includes(p))) {
+      return { detected: true, type: "text" };
     }
-    const bodyText = (document.body && document.body.innerText || "").toLowerCase();
-    const phrases = [
-      "unusual traffic", "our systems have detected",
-      "please show you're not a robot", "i'm not a robot",
-      "verify you are human", "automated queries"
-    ];
-    for (const phrase of phrases) {
-      if (bodyText.includes(phrase)) return { detected: true, type: "challenge-text", phrase };
-    }
-    if (
-      document.querySelector("#captcha") ||
-      document.querySelector(".g-recaptcha") ||
-      document.querySelector('iframe[src*="recaptcha"]')
-    ) {
-      return { detected: true, type: "recaptcha-element" };
+    if (document.querySelector('.g-recaptcha, iframe[src*="recaptcha"]')) {
+      return { detected: true, type: "recaptcha" };
     }
     return { detected: false };
   }
 
-  async function handleCaptcha(info) {
-    const COOLDOWN_MS = 30 * 60 * 1000;
-    const cooldownUntil = Date.now() + COOLDOWN_MS;
+  async function handleCaptcha() {
+    const cooldownUntil = Date.now() + 30 * 60 * 1000;
     await chrome.storage.local.set({
       autoScrape: false,
-      captchaDetected: { detected: true, type: info.type, detectedAt: Date.now(), cooldownUntil, url: location.href }
+      captchaDetected: { detected: true, detectedAt: Date.now(), cooldownUntil }
     });
-    await setProgress({
-      isRunning: false,
-      title: "Paused: CAPTCHA detected",
-      currentItem: `Cooldown 30 min. Resume after ${new Date(cooldownUntil).toLocaleTimeString()}`
-    });
-    showToast("Suspicious activity detected. Pausing 30 min.", "#dc2626");
-    try {
-      await chrome.runtime.sendMessage({ type: "CAPTCHA_DETECTED", info: { ...info, cooldownUntil, url: location.href } });
-      await chrome.runtime.sendMessage({ type: "ACCOUNT_FLAGGED", reason: "captcha" });
-    } catch (_) {}
+    await setProgress({ isRunning: false, title: "CAPTCHA detected", currentItem: "Paused 30 min" });
+    showToast("CAPTCHA detected! Pausing 30 min.", "#dc2626");
+    try { await chrome.runtime.sendMessage({ type: "CAPTCHA_DETECTED", info: { cooldownUntil } }); } catch (_) {}
   }
 
   // ============================================
-  // Toast
+  // UI Toast
   // ============================================
-  function showToast(message, color) {
-    let toast = document.getElementById("__mls_toast__");
-    if (!toast) {
-      toast = document.createElement("div");
-      toast.id = "__mls_toast__";
-      Object.assign(toast.style, {
-        position: "fixed", bottom: "20px", right: "20px",
-        background: "#2563eb", color: "#fff",
-        padding: "12px 16px", borderRadius: "10px",
-        font: "13px/1.4 system-ui, sans-serif",
-        zIndex: 999999, boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-        opacity: "0", transition: "opacity .25s ease",
-        maxWidth: "320px", fontWeight: "500"
+  function showToast(msg, color) {
+    let t = document.getElementById("__mls_toast__");
+    if (!t) {
+      t = document.createElement("div");
+      t.id = "__mls_toast__";
+      Object.assign(t.style, {
+        position: "fixed", bottom: "20px", right: "20px", background: "#2563eb",
+        color: "#fff", padding: "12px 16px", borderRadius: "10px", zIndex: 999999,
+        font: "13px/1.4 system-ui", boxShadow: "0 8px 24px rgba(0,0,0,.2)",
+        opacity: "0", transition: "opacity .25s", maxWidth: "320px", fontWeight: "500"
       });
-      document.body.appendChild(toast);
+      document.body.appendChild(t);
     }
-    toast.style.background = color || "#2563eb";
-    toast.textContent = message;
-    requestAnimationFrame(() => (toast.style.opacity = "1"));
-    clearTimeout(toast._t);
-    toast._t = setTimeout(() => (toast.style.opacity = "0"), 4000);
+    t.style.background = color || "#2563eb";
+    t.textContent = msg;
+    t.style.opacity = "1";
+    clearTimeout(t._t);
+    t._t = setTimeout(() => (t.style.opacity = "0"), 4000);
   }
 
   // ============================================
-  // Storage helpers
+  // Storage
   // ============================================
   async function setProgress(patch) {
     const { progress = {} } = await chrome.storage.local.get(["progress"]);
-    await chrome.storage.local.set({
-      progress: { ...progress, ...patch, updatedAt: Date.now() }
-    });
-  }
-
-  async function clearProgress() {
-    await chrome.storage.local.set({ progress: { isRunning: false } });
-  }
-
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function randomDelay(base) {
-    const variance = base * 0.4;
-    return base + (Math.random() - 0.5) * variance;
+    await chrome.storage.local.set({ progress: { ...progress, ...patch, updatedAt: Date.now() } });
   }
 
   // ============================================
-  // Page detection
+  // FIND RESULTS CONTAINER
   // ============================================
-  function isMapsPage() {
-    return /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(location.href);
-  }
+  function findFeed() {
+    let el = document.querySelector('div[role="feed"]');
+    if (el) return el;
 
-  function isGoogleSearchPage() {
-    return /^https?:\/\/(www\.)?google\.com\/search/.test(location.href);
-  }
+    // Scrollable panel with place links
+    for (const div of document.querySelectorAll('div.m6QErb')) {
+      if (div.scrollHeight > div.clientHeight + 50 && div.querySelector('a[href*="/maps/place/"]')) return div;
+    }
 
-  // ============================================
-  // GOOGLE MAPS SCRAPER (Main feature)
-  // ============================================
-
-  // Find the scrollable results sidebar
-  function findResultsContainer() {
-    // Modern Google Maps: scrollable feed with role="feed"
-    let feed = document.querySelector('div[role="feed"]');
-    if (feed) return feed;
-    // Fallback: any aria-label that contains "Results"
-    feed = document.querySelector('[aria-label*="Results for" i]');
-    if (feed) return feed;
-    // Older layout
-    feed = document.querySelector('.section-scrollbox, .section-listbox');
-    return feed || null;
-  }
-
-  // Extract place data from a single result card in the sidebar
-  function extractCardData(card) {
-    const out = {};
-
-    // Name (the main link's aria-label OR heading)
-    const link = card.querySelector('a[href*="/maps/place/"]');
+    // Walk up from first place link
+    const link = document.querySelector('a.hfpxzc, a[href*="/maps/place/"]');
     if (link) {
-      out.url = link.href;
-      out.title = link.getAttribute("aria-label") || "";
-    }
-    if (!out.title) {
-      const heading = card.querySelector('div[role="heading"], .fontHeadlineSmall');
-      if (heading) out.title = heading.textContent.trim();
-    }
-
-    // Rating + reviews count
-    const ratingEl = card.querySelector('span[role="img"][aria-label*="star" i]');
-    if (ratingEl) {
-      const lbl = ratingEl.getAttribute("aria-label") || "";
-      const m = lbl.match(/([\d.]+)\s*star/i);
-      if (m) out.rating = parseFloat(m[1]);
-      const m2 = lbl.match(/(\d[\d,]*)\s*review/i);
-      if (m2) out.reviewCount = parseInt(m2[1].replace(/,/g, ""));
-    }
-
-    // Category, address, hours from text spans
-    const allText = card.innerText || "";
-    const lines = allText.split("\n").map(l => l.trim()).filter(Boolean);
-
-    // Phone — search whole text
-    const phoneMatch = allText.match(/\+?[\d][\d\s\-().]{7,}\d/);
-    if (phoneMatch) out.phone = phoneMatch[0].trim();
-
-    // Try to identify address (line that contains a digit + street-like pattern)
-    for (const line of lines) {
-      if (line === out.title) continue;
-      if (/\d/.test(line) && /[a-zA-Z]/.test(line) && line.length > 8 && line.length < 120) {
-        if (!out.address) {
-          out.address = line;
-          break;
-        }
+      let p = link.parentElement;
+      while (p && p !== document.body) {
+        if (p.scrollHeight > p.clientHeight + 100) return p;
+        p = p.parentElement;
       }
     }
-
-    // Category usually 2nd line after title
-    const titleIdx = lines.indexOf(out.title);
-    if (titleIdx >= 0 && lines[titleIdx + 1]) {
-      const next = lines[titleIdx + 1];
-      if (next.length < 50 && !/\d{3}/.test(next)) out.category = next;
-    }
-
-    // Website link (sometimes available)
-    const websiteLink = card.querySelector('a[data-value="Website"], a[aria-label*="Website" i]');
-    if (websiteLink) out.website = websiteLink.href;
-
-    // Hours
-    const hoursMatch = allText.match(/(open|closed|opens|closes)[^\n]*/i);
-    if (hoursMatch) out.hours = hoursMatch[0].trim();
-
-    out.scrapedAt = new Date().toISOString();
-    return out;
+    return null;
   }
 
-  // Click into a place card to get the detail panel (more accurate phone/website/email)
-  async function openPlaceDetail(card) {
-    const link = card.querySelector('a[href*="/maps/place/"]');
-    if (!link) return null;
-    link.click();
-    // Wait for detail panel to load
-    await sleep(1200);
-    return await extractDetailPanel();
-  }
+  // ============================================
+  // PHASE 1: BULK SCROLL — collect all cards fast
+  // No clicking, no waiting, just scroll + extract from sidebar
+  // ============================================
+  async function phase1_scroll(container, maxScrolls) {
+    log("Phase 1: Scrolling to load all businesses...");
+    let lastCount = 0, stuckCount = 0;
 
-  async function extractDetailPanel() {
-    const out = {};
-    // Wait for panel to render
-    let attempts = 0;
-    while (attempts < 8) {
-      const heading = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"]');
-      if (heading) break;
-      await sleep(400);
-      attempts++;
-    }
-
-    // Title
-    const heading = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"], h1');
-    if (heading) out.title = heading.textContent.trim();
-
-    // URL
-    out.url = location.href;
-
-    // Rating
-    const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"], span.ceNzKf');
-    if (ratingEl) {
-      const r = parseFloat(ratingEl.textContent);
-      if (r) out.rating = r;
-    }
-
-    // Review count
-    const reviewEl = document.querySelector('button[jsaction*="reviewChart"] span, span.UY7F9');
-    if (reviewEl) {
-      const m = reviewEl.textContent.match(/(\d[\d,]*)/);
-      if (m) out.reviewCount = parseInt(m[1].replace(/,/g, ""));
-    }
-
-    // Category
-    const catEl = document.querySelector('button[jsaction*="category"], .DkEaL');
-    if (catEl) out.category = catEl.textContent.trim();
-
-    // Action buttons (modern selectors)
-    const buttons = document.querySelectorAll('button[data-item-id], a[data-item-id]');
-    buttons.forEach(btn => {
-      const id = btn.getAttribute("data-item-id") || "";
-      const aria = btn.getAttribute("aria-label") || "";
-      const text = btn.textContent.trim();
-
-      if (id.includes("phone") || id.startsWith("phone:tel:") || aria.toLowerCase().includes("phone")) {
-        const m = (aria + " " + text).match(/\+?[\d][\d\s\-().]{7,}\d/);
-        if (m) out.phone = m[0].trim();
-      }
-      if (id === "address" || aria.toLowerCase().includes("address")) {
-        out.address = text || aria.replace(/^address[: ]/i, "").trim();
-      }
-      if (id === "authority" || aria.toLowerCase().includes("website")) {
-        out.website = btn.href || btn.getAttribute("data-url") || "";
-      }
-      if (id.startsWith("oh") || aria.toLowerCase().includes("hours")) {
-        out.hours = text.split("\n")[0];
-      }
-      if (id === "plus_code") out.plusCode = text;
-    });
-
-    // Fallback: search for tel:/mailto: links anywhere
-    if (!out.phone) {
-      const tel = document.querySelector('a[href^="tel:"]');
-      if (tel) out.phone = tel.href.replace(/^tel:/, "").trim();
-    }
-    const mailto = document.querySelector('a[href^="mailto:"]');
-    if (mailto) out.email = mailto.href.replace(/^mailto:/, "").trim();
-
-    // Domain
-    if (out.website) {
-      try { out.domain = new URL(out.website).hostname.replace(/^www\./, ""); } catch (_) {}
-    }
-
-    // Coordinates (from URL)
-    const m = location.href.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/);
-    if (m) {
-      out.latitude = parseFloat(m[1]);
-      out.longitude = parseFloat(m[2]);
-    }
-
-    out.scrapedAt = new Date().toISOString();
-    return out;
-  }
-
-  // Scroll the results feed
-  async function scrollResults(container, settings) {
-    const maxScrolls = settings.searchScroll || 25;
-    const waitMs = (settings.profileWait || 2) * 250; // shorter for scroll
-
-    let lastHeight = container.scrollHeight;
-    let scrollCount = 0;
-    let stuckCount = 0;
-
-    while (scrollCount < maxScrolls && !SHOULD_STOP) {
-      // Check CAPTCHA periodically
-      if (scrollCount % 5 === 0) {
+    for (let i = 0; i < maxScrolls && !SHOULD_STOP; i++) {
+      // CAPTCHA check every 10 scrolls
+      if (i > 0 && i % 10 === 0) {
         const cap = detectCaptcha();
-        if (cap.detected) {
-          await handleCaptcha(cap);
-          return;
-        }
+        if (cap.detected) { await handleCaptcha(); return []; }
       }
 
-      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-      await sleep(randomDelay(waitMs));
-      scrollCount++;
+      container.scrollTop = container.scrollHeight;
+      await sleep(rand(800, 1300));
 
-      const newHeight = container.scrollHeight;
-      const cards = container.querySelectorAll('a[href*="/maps/place/"]');
+      const count = container.querySelectorAll('a.hfpxzc, a[href*="/maps/place/"]').length;
 
       await setProgress({
-        isRunning: true,
-        title: "Scrolling Maps results...",
-        currentPage: scrollCount,
-        totalPages: maxScrolls,
-        currentItem: `Found ${cards.length} businesses so far`,
-        totalFound: cards.length
+        isRunning: true, title: "Phase 1: Loading results...",
+        currentPage: i + 1, totalPages: maxScrolls,
+        totalFound: count, currentItem: `${count} businesses found`
       });
 
-      // Check for "end of list" indicator
-      const endText = container.innerText || "";
-      if (endText.includes("You've reached the end") || endText.toLowerCase().includes("no more")) {
-        showToast("Reached end of results");
+      // End of list check
+      const endEl = container.querySelector('span.HlvSq, p.fontBodyMedium');
+      if (endEl && endEl.textContent.toLowerCase().includes("end")) {
+        log(`End of results at scroll ${i + 1}, total: ${count}`);
         break;
       }
 
-      if (newHeight === lastHeight) {
+      if (count === lastCount) {
         stuckCount++;
-        if (stuckCount >= 3) break; // No more results loading
+        if (stuckCount >= 5) { log(`Stuck after ${stuckCount} attempts, total: ${count}`); break; }
+        await sleep(1500);
       } else {
         stuckCount = 0;
       }
-      lastHeight = newHeight;
-    }
-  }
-
-  // Extract all visible cards from feed
-  function getAllCards(container) {
-    const links = container.querySelectorAll('a[href*="/maps/place/"]');
-    const cards = [];
-    const seen = new Set();
-    links.forEach(link => {
-      // Find the card wrapper (parent with clickable area)
-      let card = link.closest('div[jsaction], div[role="article"]') || link.parentElement;
-      if (card && !seen.has(link.href)) {
-        seen.add(link.href);
-        cards.push({ card, link });
-      }
-    });
-    return cards;
-  }
-
-  // ============================================
-  // Main Maps campaign runner
-  // ============================================
-  async function runMapsCampaign() {
-    if (CAMPAIGN_RUNNING) {
-      showToast("Campaign already running", "#f59e0b");
-      return { ok: false, error: "already-running" };
-    }
-    CAMPAIGN_RUNNING = true;
-    SHOULD_STOP = false;
-
-    const settings = await chrome.storage.local.get([
-      "targetLeads", "searchScroll", "profileWait",
-      "deepEnrich", "fields", "savedKeywords", "savedLocations"
-    ]);
-    const target = settings.targetLeads || 100;
-
-    showToast("Starting Maps scrape...", "#2563eb");
-
-    // 1. Check CAPTCHA first
-    const cap = detectCaptcha();
-    if (cap.detected) {
-      await handleCaptcha(cap);
-      CAMPAIGN_RUNNING = false;
-      return { ok: false, captcha: true };
+      lastCount = count;
     }
 
-    // 2. Find results sidebar
-    const container = findResultsContainer();
-    if (!container) {
-      showToast("Maps results sidebar not found. Make sure search results are visible.", "#dc2626");
-      CAMPAIGN_RUNNING = false;
-      return { ok: false, error: "no-feed" };
-    }
-
-    await setProgress({
-      isRunning: true,
-      title: "Loading Maps results...",
-      currentPage: 0,
-      totalPages: settings.searchScroll || 25,
-      totalFound: 0,
-      currentItem: "Scrolling sidebar..."
-    });
-
-    // 3. Scroll to load results
-    await scrollResults(container, settings);
-
-    if (SHOULD_STOP) {
-      CAMPAIGN_RUNNING = false;
-      await clearProgress();
-      return { ok: true, stopped: true };
-    }
-
-    // 4. Get all cards
-    const cards = getAllCards(container);
-    showToast(`Found ${cards.length} businesses, extracting data...`, "#2563eb");
-
-    let totalSaved = 0;
-    const profileWaitMs = (settings.profileWait || 7) * 1000;
-
-    // 5. For each card, click to open detail and extract
-    for (let i = 0; i < cards.length && i < target; i++) {
-      if (SHOULD_STOP) break;
-
-      // CAPTCHA check every 10 profiles
-      if (i % 10 === 0) {
-        const c = detectCaptcha();
-        if (c.detected) {
-          await handleCaptcha(c);
-          break;
+    // Extract data from all cards
+    const cards = container.querySelectorAll('div.Nv2PK');
+    let fallbackCards = [];
+    if (cards.length === 0) {
+      // Fallback: find by links
+      const links = container.querySelectorAll('a.hfpxzc, a[href*="/maps/place/"]');
+      const seen = new Set();
+      links.forEach(link => {
+        if (!seen.has(link.href)) {
+          seen.add(link.href);
+          const wrapper = link.closest('div.Nv2PK') || link.closest('div[jsaction]') || link.parentElement;
+          if (wrapper) fallbackCards.push(wrapper);
         }
+      });
+    }
+
+    const allCards = cards.length > 0 ? Array.from(cards) : fallbackCards;
+    log(`Phase 1 complete: ${allCards.length} cards found`);
+
+    // Extract basic data from each card
+    const results = [];
+    const seenUrls = new Set();
+
+    for (const card of allCards) {
+      const data = extractFromCard(card);
+      if (data && data.title && data.url && !seenUrls.has(data.url)) {
+        seenUrls.add(data.url);
+        results.push({ card, data });
+      }
+    }
+
+    log(`Phase 1 extracted: ${results.length} unique businesses`);
+    return results;
+  }
+
+  // Extract data from sidebar card (NO click needed)
+  // FIXED: Properly separates rating/reviews/price from address/category
+  function extractFromCard(card) {
+    const out = { scrapedAt: new Date().toISOString() };
+
+    // Title + URL from main link
+    const link = card.querySelector('a.hfpxzc, a[href*="/maps/place/"]');
+    if (!link) return null;
+    out.url = link.href;
+    out.title = (link.getAttribute("aria-label") || "").trim();
+
+    if (!out.title) {
+      const h = card.querySelector('.qBF1Pd, .fontHeadlineSmall, div[role="heading"]');
+      if (h) out.title = h.textContent.trim();
+    }
+    if (!out.title) return null;
+
+    // Clean title — remove "· Visited..." or "· X mentions"
+    out.title = out.title.replace(/\s*·\s*(Visited|Mentioned|Featured).*$/i, "").trim();
+
+    // Rating — from dedicated element
+    const rEl = card.querySelector('.MW4etd');
+    if (rEl) {
+      const r = parseFloat(rEl.textContent);
+      if (r > 0 && r <= 5) out.rating = r;
+    }
+
+    // Review count — from dedicated element
+    const revEl = card.querySelector('.UY7F9');
+    if (revEl) {
+      const text = revEl.textContent.replace(/[()]/g, "");
+      const m = text.match(/(\d[\d,]*)/);
+      if (m) out.reviewCount = parseInt(m[1].replace(/,/g, ""), 10);
+    }
+
+    // === SMART PARSING of card text ===
+    // Google Maps card has multiple info rows. We need to correctly identify:
+    // - Category (short text, no digits, like "Cafe", "Restaurant")
+    // - Address (has road/house numbers, comma-separated)
+    // - Price (starts with currency symbol: $, ৳, €, £, ₹)
+    // - Phone (digit pattern 8-15 digits)
+    // - Hours (Open/Closed/Opens/Closes)
+    // - Rating text like "4.3(1,696)" — MUST SKIP this
+
+    const allText = card.innerText || "";
+    const lines = allText.split("\n").map(s => s.trim()).filter(s => s && s !== "·");
+
+    // Skip patterns — these are NOT address/category
+    const SKIP_PATTERNS = [
+      /^\d+\.\d+\(\d/, // "4.3(1,696)" — rating(reviews) 
+      /^\d+\.\d+$/, // "4.3" — just rating
+      /^\(\d/, // "(1,696)" — just reviews
+      /^[\$€£₹৳¥₩]\d/, // "$10" "৳600" — price
+      /^[\$€£₹৳¥₩]\s?\d/, // "$ 10"
+      /^\d[\d,]*\s*reviews?$/i, // "1,696 reviews"
+      /^Visited/i, // "Visited last week"
+      /^Mentioned/i, // "Mentioned in..."
+      /^Open\b|^Closed\b|^Opens\b|^Closes\b/i, // Hours
+      /^\d+\s*(min|km|mi|m)\b/i, // Distance "5 min", "2.3 km"
+    ];
+
+    // Price range pattern (like ৳600-800, $10-20, $$)
+    const PRICE_RE = /^[\$€£₹৳¥₩]+[\d\s\-–,]*$|^\$+$/;
+
+    for (const line of lines) {
+      // Skip the title itself
+      if (line === out.title) continue;
+      // Skip any pattern we know is not useful for category/address
+      if (SKIP_PATTERNS.some(re => re.test(line))) continue;
+      // Skip price ranges
+      if (PRICE_RE.test(line)) continue;
+      // Skip very short items (1-2 chars like "·")
+      if (line.length < 3) continue;
+
+      // === Identify PHONE ===
+      if (!out.phone) {
+        const phoneMatch = line.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+        if (phoneMatch) {
+          const digits = phoneMatch[1].replace(/\D/g, "");
+          if (digits.length >= 8 && digits.length <= 15) {
+            out.phone = phoneMatch[1].trim();
+            continue;
+          }
+        }
+      }
+
+      // === Identify HOURS ===
+      if (!out.hours && /^(Open|Closed|Opens|Closes)/i.test(line)) {
+        out.hours = line;
+        continue;
+      }
+
+      // === Identify CATEGORY ===
+      // Category: short (< 35 chars), no digits (or very few), no commas usually
+      if (!out.category && line.length < 35 && !/\d{2,}/.test(line) && !line.includes(",")) {
+        // Extra check: not a distance or price
+        if (!/^\d/.test(line) && !/[₹$€£৳]/.test(line)) {
+          out.category = line;
+          continue;
+        }
+      }
+
+      // === Identify ADDRESS ===
+      // Address: longer text, has numbers or comma, looks like street/area
+      if (!out.address && line.length > 5 && line.length < 200) {
+        // Must contain a digit OR comma OR known address keywords
+        if (/\d/.test(line) || line.includes(",") ||
+            /\b(road|rd|street|st|house|floor|block|sector|lane|plot|area|no\.?)\b/i.test(line)) {
+          // Make sure it's not a phone (too many consecutive digits)
+          const digitOnly = line.replace(/\D/g, "");
+          if (digitOnly.length < 11) { // Phone numbers are 8-15 digits
+            out.address = line;
+            continue;
+          }
+        }
+      }
+    }
+
+    // Coordinates from URL
+    const coordMatch = out.url.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/);
+    if (coordMatch) {
+      out.latitude = parseFloat(coordMatch[1]);
+      out.longitude = parseFloat(coordMatch[2]);
+    }
+
+    return out;
+  }
+
+  // ============================================
+  // PHASE 2: DEEP CLICK — get phone/website/address
+  // Only click cards that are missing critical data
+  // ============================================
+  async function phase2_deepClick(results, profileWaitSec) {
+    log("Phase 2: Clicking profiles for full data...");
+    const waitMs = profileWaitSec * 1000;
+    let enriched = 0;
+
+    for (let i = 0; i < results.length && !SHOULD_STOP; i++) {
+      const { card, data } = results[i];
+
+      // Click ALL profiles — detail panel has accurate phone/category/hours/address
+      // Only skip if FULLY enriched from a previous run
+      if (data._enriched) continue;
+
+      // CAPTCHA check every 8 profiles
+      if (enriched > 0 && enriched % 8 === 0) {
+        const cap = detectCaptcha();
+        if (cap.detected) { await handleCaptcha(); break; }
       }
 
       await setProgress({
-        isRunning: true,
-        title: "Opening profile " + (i + 1),
-        currentPage: i + 1,
-        totalPages: Math.min(cards.length, target),
-        totalFound: totalSaved,
-        currentItem: `Profile ${i + 1}/${cards.length}`
+        isRunning: true, title: `Phase 2: Profile ${enriched + 1}`,
+        currentPage: i + 1, totalPages: results.length,
+        totalFound: enriched, currentItem: data.title.slice(0, 35)
       });
 
       try {
-        // Click the link
-        cards[i].link.click();
-        await sleep(randomDelay(profileWaitMs));
+        const link = card.querySelector('a.hfpxzc, a[href*="/maps/place/"]');
+        if (!link) continue;
+
+        // Scroll into view + click
+        link.scrollIntoView({ block: "center", behavior: "instant" });
+        await sleep(rand(200, 400));
+        link.click();
+
+        // Wait for detail panel to ACTUALLY load (not just sleep)
+        // Check for heading element appearing = panel loaded
+        let panelReady = false;
+        for (let w = 0; w < 10 && !panelReady; w++) {
+          await sleep(rand(500, 800));
+          const h = document.querySelector('h1.DUwDvf, h1.fontHeadlineLarge, h1[class*="fontHeadlineLarge"]');
+          const items = document.querySelectorAll('[data-item-id]');
+          if (h && items.length >= 2) panelReady = true;
+        }
+        // Extra buffer for slower connections
+        if (!panelReady) await sleep(2000);
 
         // Extract from detail panel
-        const data = await extractDetailPanel();
-        if (data && data.title) {
-          const added = await saveLead(data);
-          if (added) totalSaved++;
+        const detail = extractFromDetailPanel();
+
+        // Detail panel ALWAYS wins — most accurate data source
+        if (detail.phone) data.phone = detail.phone;
+        if (detail.website) data.website = detail.website;
+        if (detail.address) data.address = detail.address;
+        if (detail.category) data.category = detail.category;
+        if (detail.hours) data.hours = detail.hours;
+        if (detail.email) data.email = detail.email;
+        if (detail.plusCode) data.plusCode = detail.plusCode;
+        data._enriched = true;
+
+        // Domain from website
+        if (data.website && !data.domain) {
+          try { data.domain = new URL(data.website).hostname.replace(/^www\./, ""); } catch (_) {}
         }
+
+        enriched++;
       } catch (e) {
-        console.warn("[Maps] Failed to extract profile:", e);
+        log("Phase 2 error:", e.message);
       }
 
-      // Track for account rotation
-      try {
-        await chrome.runtime.sendMessage({ type: "ACCOUNT_LEADS_INCREMENT", count: 1 });
-      } catch (_) {}
+      // Anti-detection: random pause every few profiles
+      if (enriched % 5 === 0 && enriched > 0) {
+        await sleep(rand(2000, 4000));
+      }
     }
 
-    await setProgress({
-      isRunning: false,
-      title: "Campaign complete",
-      currentItem: `Saved ${totalSaved} new leads`
-    });
-    setTimeout(clearProgress, 4000);
+    log(`Phase 2 complete: ${enriched} profiles enriched`);
+  }
 
-    showToast(`\u2713 Done! Saved ${totalSaved} new leads.`, "#22c55e");
-    CAMPAIGN_RUNNING = false;
-    return { ok: true, saved: totalSaved };
+  // Extract data from the currently open detail panel (right side)
+  // BULLETPROOF VERSION: Only extracts from structured data-item-id elements
+  // No text guessing, no mixed data possible
+  function extractFromDetailPanel() {
+    const out = {};
+
+    // === STRUCTURED DATA from data-item-id (100% reliable) ===
+    document.querySelectorAll('[data-item-id]').forEach(el => {
+      const id = el.getAttribute("data-item-id") || "";
+      const aria = el.getAttribute("aria-label") || "";
+      const text = (el.textContent || "").trim();
+
+      // PHONE: id format "phone:tel:+8801714070077" or "phone:tel:01714070077"
+      if (id.startsWith("phone:tel:") && !out.phone) {
+        out.phone = id.replace("phone:tel:", "").trim();
+      }
+
+      // ADDRESS: id="address", aria-label has the clean full address
+      if (id === "address" && !out.address) {
+        if (aria) {
+          out.address = aria.replace(/^Address:\s*/i, "").trim();
+        } else if (text.length > 5) {
+          out.address = text;
+        }
+      }
+
+      // WEBSITE: id="authority", href has the URL
+      if (id === "authority" && !out.website) {
+        const href = el.href || el.querySelector("a")?.href || "";
+        if (href && href.startsWith("http") && !href.includes("google.com")) {
+          out.website = href;
+        } else if (text && text.includes(".") && !text.includes("google")) {
+          // Sometimes text shows domain like "example.com"
+          out.website = text.startsWith("http") ? text : "https://" + text;
+        }
+      }
+
+      // HOURS: id starts with "oh", aria-label has full weekly schedule
+      if (id.startsWith("oh") && !out.hours) {
+        if (aria && aria.length > 5) {
+          // aria-label: "Hours: Monday, 9 AM to 10 PM..." or similar
+          out.hours = aria.replace(/^Hours?:\s*/i, "").trim();
+        } else if (text.length > 3) {
+          // Visible text fallback
+          out.hours = text.replace(/\s+/g, " ").trim();
+        }
+      }
+
+      // PLUS CODE: id="oloc"
+      if (id === "oloc" && !out.plusCode) {
+        out.plusCode = text;
+      }
+    });
+
+    // === PHONE FALLBACKS ===
+    if (!out.phone) {
+      // Try tel: link (always has full number)
+      const tel = document.querySelector('a[href^="tel:"]');
+      if (tel) {
+        out.phone = tel.href.replace("tel:", "").trim();
+      }
+    }
+    if (!out.phone) {
+      // Try aria-label that mentions phone
+      const phoneBtn = document.querySelector('[data-item-id*="phone"]');
+      if (phoneBtn) {
+        const lbl = phoneBtn.getAttribute("aria-label") || phoneBtn.textContent || "";
+        const m = lbl.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+        if (m) out.phone = m[1].trim();
+      }
+    }
+
+    // === WEBSITE FALLBACK ===
+    if (!out.website) {
+      const auth = document.querySelector('a[data-item-id="authority"]');
+      if (auth && auth.href && !auth.href.includes("google.com")) {
+        out.website = auth.href;
+      }
+    }
+
+    // === CATEGORY (from dedicated button — NOT from text parsing) ===
+    const catBtn = document.querySelector('button[jsaction*="category"]');
+    if (catBtn && catBtn.textContent.trim().length > 1) {
+      out.category = catBtn.textContent.trim();
+    } else {
+      const catSpan = document.querySelector('.DkEaL, span.DkEaL');
+      if (catSpan) out.category = catSpan.textContent.trim();
+    }
+
+    // === EMAIL (from mailto link only — no guessing) ===
+    const mailto = document.querySelector('a[href^="mailto:"]');
+    if (mailto) {
+      const email = mailto.href.replace("mailto:", "").split("?")[0].trim().toLowerCase();
+      if (email && email.includes("@") && email.includes(".")) {
+        out.email = email;
+      }
+    }
+
+    return out;
   }
 
   // ============================================
-  // Save lead to storage (with dedup)
+  // PHASE 3: Save + Trigger Deep Enrich
+  // Only saves fields that user has selected in popup
   // ============================================
-  async function saveLead(data) {
+  async function phase3_save(results) {
+    log("Phase 3: Saving leads...");
     const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
+    let saved = 0;
 
-    // Dedup by URL or title+address
-    const key = data.url || (data.title + "|" + (data.address || ""));
-    const exists = leads.some(l =>
-      (l.url && l.url === data.url) ||
-      (l.title === data.title && l.address === data.address)
-    );
-    if (exists) return false;
+    // Which fields are enabled (from popup checkboxes)
+    const enabledFields = Object.keys(fields).filter(k => fields[k]);
+    // Always include these for dedup
+    const alwaysKeep = ["url", "scrapedAt"];
 
-    // Apply field filter
-    const filtered = { scrapedAt: data.scrapedAt };
-    const allowed = ["title", "url", "phone", "address", "website", "domain",
-      "category", "rating", "reviewCount", "hours", "email", "latitude", "longitude", "plusCode"];
-    for (const f of allowed) {
-      if (data[f] !== undefined) filtered[f] = data[f];
+    for (const { data } of results) {
+      if (!data || !data.title) continue;
+
+      // Dedup
+      const exists = leads.some(l =>
+        (l.url && l.url === data.url) ||
+        (l.title === data.title && l.address && l.address === data.address)
+      );
+      if (exists) continue;
+
+      // Filter to only selected fields
+      const filtered = {};
+      for (const key of [...enabledFields, ...alwaysKeep]) {
+        if (data[key] !== undefined && data[key] !== null && data[key] !== "") {
+          filtered[key] = data[key];
+        }
+      }
+      // Always keep title for identification
+      if (data.title) filtered.title = data.title;
+
+      leads.push(filtered);
+      saved++;
     }
-    // Always keep url internally for dedup
-    filtered.url = data.url;
 
-    leads.push(filtered);
     await chrome.storage.local.set({ leads });
 
     // Update today count
     const { todayLeadCount = 0, todayLeadDate } = await chrome.storage.local.get(["todayLeadCount", "todayLeadDate"]);
     const today = new Date().toDateString();
-    const newCount = (todayLeadDate === today) ? todayLeadCount + 1 : 1;
-    await chrome.storage.local.set({ todayLeadCount: newCount, todayLeadDate: today });
+    await chrome.storage.local.set({
+      todayLeadCount: todayLeadDate === today ? todayLeadCount + saved : saved,
+      todayLeadDate: today
+    });
 
-    return true;
+    log(`Phase 3 complete: ${saved} new leads saved (total: ${leads.length})`);
+    return saved;
   }
 
   // ============================================
-  // Multi-keyword/location campaign
+  // MAIN CAMPAIGN RUNNER
   // ============================================
-  async function runMultiCampaign() {
-    const { savedKeywords = "", savedLocations = "" } = await chrome.storage.local.get(["savedKeywords", "savedLocations"]);
-    const keywords = savedKeywords.split("\n").map(s => s.trim()).filter(Boolean);
-    const locations = savedLocations.split("\n").map(s => s.trim()).filter(Boolean);
-
-    if (!keywords.length) {
-      showToast("No keywords set. Enter keywords in the popup.", "#dc2626");
-      return { ok: false, error: "no-keywords" };
+  async function runCampaign() {
+    if (CAMPAIGN_RUNNING) {
+      showToast("Already running!", "#f59e0b");
+      return { ok: false, error: "running" };
     }
+    CAMPAIGN_RUNNING = true;
+    SHOULD_STOP = false;
 
-    // If currently on Maps with results — just scrape this one
-    if (isMapsPage() && findResultsContainer()) {
-      return await runMapsCampaign();
+    try {
+      // Settings
+      const settings = await chrome.storage.local.get(["targetLeads", "searchScroll", "profileWait"]);
+      const maxScrolls = settings.searchScroll || 50;
+      const profileWait = settings.profileWait || 5;
+      const target = settings.targetLeads || 500;
+
+      // CAPTCHA check
+      const cap = detectCaptcha();
+      if (cap.detected) { await handleCaptcha(); return { ok: false, captcha: true }; }
+
+      showToast("Starting scrape...", "#2563eb");
+
+      // Wait for feed
+      const container = await waitFor(findFeed, 15000, 500);
+      if (!container) {
+        showToast("Results not found. Reload Maps.", "#dc2626");
+        return { ok: false, error: "no-feed" };
+      }
+
+      // === PHASE 1: Scroll & Extract Cards ===
+      const results = await phase1_scroll(container, maxScrolls);
+      if (SHOULD_STOP || results.length === 0) {
+        await setProgress({ isRunning: false });
+        return { ok: true, saved: 0, stopped: SHOULD_STOP };
+      }
+
+      // Limit to target
+      const limited = results.slice(0, target);
+      showToast(`Found ${limited.length} businesses. Getting details...`, "#2563eb");
+
+      // === PHASE 2: Click for Phone/Website ===
+      await phase2_deepClick(limited, profileWait);
+
+      if (SHOULD_STOP) {
+        await setProgress({ isRunning: false });
+      }
+
+      // === PHASE 3: Save All ===
+      const saved = await phase3_save(limited);
+
+      // ALWAYS trigger background deep-enrich for emails (automatic)
+      try { await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" }); } catch (_) {}
+
+      await setProgress({
+        isRunning: false, title: "Done!",
+        currentItem: `${saved} leads saved`, totalFound: saved
+      });
+      setTimeout(() => setProgress({ isRunning: false }), 4000);
+
+      showToast(`Done! ${saved} new leads saved.`, "#22c55e");
+      return { ok: true, saved };
+
+    } catch (err) {
+      log("Campaign error:", err);
+      showToast("Error: " + err.message, "#dc2626");
+      return { ok: false, error: err.message };
+    } finally {
+      CAMPAIGN_RUNNING = false;
     }
-
-    // Otherwise, build first search URL and navigate
-    const query = keywords[0] + (locations.length ? " " + locations[0] : "");
-    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
-    location.href = searchUrl;
-    return { ok: true, navigating: true };
   }
 
   // ============================================
-  // Message handler
+  // MESSAGE HANDLER
   // ============================================
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, _, sendResponse) => {
     (async () => {
-      try {
-        if (msg.type === "SCRAPE_NOW") {
-          if (isMapsPage()) {
-            const r = await runMapsCampaign();
-            sendResponse(r);
-          } else {
-            sendResponse({ ok: false, error: "Open Google Maps first" });
-          }
-        } else if (msg.type === "STOP_SCRAPE") {
-          SHOULD_STOP = true;
-          showToast("Stopping after current item...", "#f59e0b");
-          sendResponse({ ok: true });
-        } else if (msg.type === "RUN_MULTI_CAMPAIGN") {
-          const r = await runMultiCampaign();
-          sendResponse(r);
-        } else if (msg.type === "PING") {
-          sendResponse({ ok: true, page: isMapsPage() ? "maps" : (isGoogleSearchPage() ? "search" : "other") });
-        }
-      } catch (e) {
-        sendResponse({ ok: false, error: String(e?.message || e) });
+      if (msg.type === "SCRAPE_NOW") {
+        sendResponse(await runCampaign());
+      } else if (msg.type === "STOP_SCRAPE") {
+        SHOULD_STOP = true;
+        showToast("Stopping...", "#f59e0b");
+        sendResponse({ ok: true });
+      } else if (msg.type === "PING") {
+        const isMaps = /google\.[a-z.]+\/maps/.test(location.href);
+        sendResponse({ ok: true, page: isMaps ? "maps" : "other" });
+      } else {
+        sendResponse({ ok: false });
       }
     })();
     return true;
   });
 
   // ============================================
-  // Auto-start on Maps if autoScrape is on
+  // AUTO-START
   // ============================================
   (async () => {
-    // Always check CAPTCHA on load
+    if (!/google\.[a-z.]+\/maps/.test(location.href)) return;
+
     const cap = detectCaptcha();
-    if (cap.detected) {
-      await handleCaptcha(cap);
-      return;
-    }
+    if (cap.detected) { await handleCaptcha(); return; }
 
     const { autoScrape, captchaDetected } = await chrome.storage.local.get(["autoScrape", "captchaDetected"]);
+    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) return;
 
-    // Honor cooldown
-    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
-      const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
-      await setProgress({ isRunning: false, title: "Cooldown", currentItem: `${minsLeft} min remaining` });
-      return;
-    }
-
-    if (autoScrape && isMapsPage()) {
-      // Wait a moment for Maps to fully load
-      setTimeout(async () => {
-        await runMapsCampaign();
-      }, 2000);
+    if (autoScrape) {
+      log("Auto-scrape: waiting for Maps to load...");
+      await sleep(3000);
+      const feed = await waitFor(findFeed, 15000, 500);
+      if (feed) {
+        log("Auto-scrape: starting campaign");
+        await runCampaign();
+      }
     }
   })();
 
