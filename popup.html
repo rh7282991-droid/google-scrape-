@@ -1,91 +1,47 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Google Lead Scraper</title>
-  <link rel="stylesheet" href="popup.css" />
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <header>
+  <div class="container">
+    <img src="assets/logo.svg" alt="Logo" class="logo">
     <h1>Google Lead Scraper</h1>
-    <span id="count" class="badge">0 leads</span>
-  </header>
+    <p class="subtitle">Collect leads from Google Maps</p>
 
-  <section class="status" id="status">Ready.</section>
-
-  <!-- Live progress -->
-  <section class="progress-box" id="progressBox" style="display:none;">
-    <div class="progress-header">
-      <span class="dot"></span>
-      <span id="progressTitle">Working...</span>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    <div class="progress-meta">
-      <span>Page <b id="progPage">0</b>/<b id="progPageTotal">0</b></span>
-      <span><b id="progFound">0</b> leads</span>
-    </div>
-    <div class="progress-current" id="progCurrent"></div>
-  </section>
-
-  <section class="controls">
-    <details class="field-picker" open>
-      <summary>Fields to extract</summary>
-      <div class="grid2">
-        <label class="chip"><input type="checkbox" id="f_title" /><span>Title</span></label>
-        <label class="chip"><input type="checkbox" id="f_url" /><span>URL</span></label>
-        <label class="chip"><input type="checkbox" id="f_description" /><span>Description</span></label>
-        <label class="chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
-        <label class="chip"><input type="checkbox" id="f_emails" /><span>Emails</span></label>
-        <label class="chip"><input type="checkbox" id="f_phones" /><span>Phones</span></label>
-        <label class="chip"><input type="checkbox" id="f_position" /><span>Position</span></label>
-        <label class="chip"><input type="checkbox" id="f_query" /><span>Search query</span></label>
-      </div>
-    </details>
-
-    <button id="scrapeNow" class="primary">Scrape this page</button>
-
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoScrape" />
-        <span>Auto-scrape on every Google page</span>
-      </label>
+    <div class="stats">
+      <div class="stat"><span id="totalLeads">0</span><small>Leads</small></div>
+      <div class="stat"><span id="totalPhones">0</span><small>Phones</small></div>
+      <div class="stat"><span id="totalEmails">0</span><small>Emails</small></div>
     </div>
 
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoNext" />
-        <span>Auto-click "Next page"</span>
-      </label>
+    <div class="instructions">
+      <p><b>How to use:</b></p>
+      <ol>
+        <li>Open <a href="https://www.google.com/maps" target="_blank">Google Maps</a></li>
+        <li>Search: <i>"restaurants in dhaka"</i></li>
+        <li>Click <b>Collect Leads</b> below</li>
+        <li>Wait for collection to finish</li>
+        <li>Export as CSV</li>
+      </ol>
     </div>
 
-    <div class="row inline">
-      <label for="autoMaxPages">Max pages:</label>
-      <input type="number" id="autoMaxPages" min="1" max="50" value="5" />
+    <button id="collectBtn" class="btn-primary">Collect Leads from This Page</button>
+
+    <div id="progress" class="progress" style="display:none;">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <p id="progressText">Collecting...</p>
     </div>
 
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoEnrich" checked />
-        <span><b>Auto-find emails &amp; phones</b> (visit each site)</span>
-      </label>
+    <div class="export-section">
+      <button id="exportCsv" class="btn-secondary">Export CSV</button>
+      <button id="exportJson" class="btn-secondary">Export JSON</button>
     </div>
 
-    <hr />
-
-    <button id="runDeep" class="secondary">Re-scan all saved leads for contacts</button>
-
-    <hr />
-
-    <div class="actions">
-      <button id="exportCsv" class="secondary">Export CSV</button>
-      <button id="exportJson" class="secondary">Export JSON</button>
-      <button id="clear" class="danger">Clear all</button>
-    </div>
-  </section>
-
-  <footer>
-    <small>Tip: open <a href="https://www.google.com/search?q=%22founder%22+site%3Alinkedin.com+dhaka" target="_blank">google.com/search</a>, then click "Scrape this page".</small>
-  </footer>
+    <button id="clearBtn" class="btn-danger">Clear All Data</button>
+  </div>
 
   <script src="popup.js"></script>
 </body>
