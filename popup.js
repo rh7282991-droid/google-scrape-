@@ -1,4 +1,4 @@
-// popup.js — UI controller
+// popup.js — UI controller (MapLeadly-style)
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -33,22 +33,34 @@ const LOCATION_NEIGHBORHOODS = {
   "melbourne": ["CBD", "Fitzroy", "St Kilda", "South Yarra", "Richmond", "Carlton"]
 };
 
+// ===== Helpers =====
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+function setStatusBadge(state) {
+  const badge = $("statusBadge");
+  badge.className = "status-badge " + state;
+  if (state === "running") badge.textContent = "Running";
+  else if (state === "paused") badge.textContent = "Paused";
+  else badge.textContent = "Ready";
+}
+
 async function refreshCount() {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  $("count").textContent = `${leads.length} leads`;
+  $("count").textContent = leads.length;
 }
 
 async function loadSettings() {
   const s = await chrome.storage.local.get([
-    "autoScrape", "autoNext", "autoMaxPages", "fields"
+    "autoScrape", "autoNext", "autoMaxPages", "fields", "profileWait", "targetLeads", "searchScroll"
   ]);
   $("autoScrape").checked = !!s.autoScrape;
   $("autoNext").checked = !!s.autoNext;
-  $("autoMaxPages").value = s.autoMaxPages || 5;
+  $("autoMaxPages").value = s.autoMaxPages || 50;
+  $("profileWait").value = s.profileWait || 7;
+  $("targetLeads").value = s.targetLeads || 100;
+  $("searchScroll").value = s.searchScroll || 25;
 
   const fields = s.fields || DEFAULT_FIELDS;
   for (const f of ALL_FIELDS) {
@@ -74,6 +86,28 @@ async function getActiveTab() {
   return tab;
 }
 
+// ===== Paste Buttons =====
+$("pasteKeywords").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) $("searchInput").value = text;
+  } catch (e) {
+    setStatus("Clipboard access denied.");
+  }
+});
+
+$("pasteLocations").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      $("locationInput").value = text;
+      expandLocationFromTextarea();
+    }
+  } catch (e) {
+    setStatus("Clipboard access denied.");
+  }
+});
+
 // ===== Feature 14: Live Preview Panel =====
 async function renderPreviewTable() {
   const { leads = [] } = await chrome.storage.local.get(["leads"]);
@@ -86,8 +120,8 @@ async function renderPreviewTable() {
 
   const last10 = leads.slice(-10).reverse();
   tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "—").slice(0, 30);
-    const phone = (lead.phones && lead.phones.length) ? lead.phones[0] : "—";
+    const name = (lead.title || "\u2014").slice(0, 30);
+    const phone = (lead.phones && lead.phones.length) ? lead.phones[0] : "\u2014";
     return `<tr><td>${i + 1}</td><td title="${lead.title || ''}">${name}</td><td>${phone}</td></tr>`;
   }).join("");
 }
@@ -109,28 +143,24 @@ let suggestTimeout = null;
 
 $("searchInput").addEventListener("input", (e) => {
   clearTimeout(suggestTimeout);
-  const query = e.target.value.trim();
-  if (query.length < 2) {
+  const lines = e.target.value.trim().split("\n");
+  const lastLine = lines[lines.length - 1].trim();
+  if (lastLine.length < 2) {
     hideSuggest("suggestList");
     return;
   }
-  suggestTimeout = setTimeout(() => fetchSuggestions(query), 300);
-});
-
-$("searchInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    hideSuggest("suggestList");
-    applySearchToGoogle();
-  }
+  suggestTimeout = setTimeout(() => fetchSuggestions(lastLine), 300);
 });
 
 async function fetchSuggestions(query) {
   try {
-    // Use Google's autocomplete suggestion API (JSONP-style, we'll use background fetch)
     const res = await chrome.runtime.sendMessage({ type: "FETCH_SUGGESTIONS", query });
     if (res && res.suggestions && res.suggestions.length) {
-      showSuggest("suggestList", res.suggestions, (val) => {
-        $("searchInput").value = val;
+      showSuggest("suggestList", "suggestWrap", res.suggestions, (val) => {
+        const textarea = $("searchInput");
+        const lines = textarea.value.split("\n");
+        lines[lines.length - 1] = val;
+        textarea.value = lines.join("\n");
         hideSuggest("suggestList");
       });
     } else {
@@ -141,8 +171,10 @@ async function fetchSuggestions(query) {
   }
 }
 
-function showSuggest(listId, items, onClick) {
+function showSuggest(listId, wrapId, items, onClick) {
+  const wrap = $(wrapId);
   const list = $(listId);
+  wrap.style.display = "block";
   list.innerHTML = items.map(item => `<li>${item}</li>`).join("");
   list.classList.add("active");
   list.querySelectorAll("li").forEach((li, i) => {
@@ -152,76 +184,43 @@ function showSuggest(listId, items, onClick) {
 
 function hideSuggest(listId) {
   const list = $(listId);
-  list.innerHTML = "";
-  list.classList.remove("active");
+  if (list) {
+    list.innerHTML = "";
+    list.classList.remove("active");
+  }
 }
 
-// Close suggestions when clicking outside
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".suggest-wrap")) {
+  if (!e.target.closest(".suggest-wrap") && !e.target.closest("textarea")) {
     hideSuggest("suggestList");
     hideSuggest("locationSuggestList");
   }
 });
-
-async function applySearchToGoogle() {
-  const query = $("searchInput").value.trim();
-  const location = $("locationInput").value.trim();
-  if (!query) return;
-
-  const fullQuery = location ? `${query} ${location}` : query;
-  const tab = await getActiveTab();
-  const url = `https://www.google.com/search?q=${encodeURIComponent(fullQuery)}`;
-
-  if (tab && /^https?:\/\/(www\.)?google\.com/.test(tab.url || "")) {
-    chrome.tabs.update(tab.id, { url });
-  } else {
-    chrome.tabs.create({ url });
-  }
-  setStatus(`Searching: "${fullQuery}"`);
-}
 
 // ===== Feature 16: Location Auto-Expand =====
 let locationTimeout = null;
 
 $("locationInput").addEventListener("input", (e) => {
   clearTimeout(locationTimeout);
-  const query = e.target.value.trim().toLowerCase();
-  if (query.length < 2) {
-    hideSuggest("locationSuggestList");
-    $("locationChips").innerHTML = "";
-    return;
-  }
-  locationTimeout = setTimeout(() => expandLocation(query), 200);
+  locationTimeout = setTimeout(() => expandLocationFromTextarea(), 300);
 });
 
-function expandLocation(query) {
-  // Check local DB first
-  const neighborhoods = findNeighborhoods(query);
-  if (neighborhoods.length) {
-    showLocationChips(neighborhoods, query);
-    // Also show as dropdown
-    const cityMatches = Object.keys(LOCATION_NEIGHBORHOODS).filter(k => k.includes(query));
-    if (cityMatches.length > 1) {
-      showSuggest("locationSuggestList", cityMatches.map(c => c.charAt(0).toUpperCase() + c.slice(1)), (val) => {
-        $("locationInput").value = val;
-        hideSuggest("locationSuggestList");
-        expandLocation(val.toLowerCase());
-      });
-    } else {
-      hideSuggest("locationSuggestList");
+function expandLocationFromTextarea() {
+  const text = $("locationInput").value.trim().toLowerCase();
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const allNeighborhoods = [];
+
+  for (const line of lines) {
+    const neighborhoods = findNeighborhoods(line);
+    if (neighborhoods.length) {
+      allNeighborhoods.push(...neighborhoods.map(n => ({ area: n, city: line })));
     }
+  }
+
+  if (allNeighborhoods.length) {
+    showLocationChips(allNeighborhoods);
   } else {
     $("locationChips").innerHTML = "";
-    // Try Google suggestions for location
-    chrome.runtime.sendMessage({ type: "FETCH_SUGGESTIONS", query: query + " area" }).then(res => {
-      if (res && res.suggestions && res.suggestions.length) {
-        showSuggest("locationSuggestList", res.suggestions, (val) => {
-          $("locationInput").value = val;
-          hideSuggest("locationSuggestList");
-        });
-      }
-    }).catch(() => {});
   }
 }
 
@@ -234,10 +233,10 @@ function findNeighborhoods(query) {
   return [];
 }
 
-function showLocationChips(neighborhoods, city) {
+function showLocationChips(items) {
   const container = $("locationChips");
-  container.innerHTML = neighborhoods.map(n =>
-    `<span class="loc-chip" data-area="${n}" data-city="${city}">${n} <span class="remove">×</span></span>`
+  container.innerHTML = items.map(item =>
+    `<span class="loc-chip" data-area="${item.area}" data-city="${item.city}">${item.area} <span class="remove">\u00d7</span></span>`
   ).join("");
 
   container.querySelectorAll(".loc-chip").forEach(chip => {
@@ -245,7 +244,12 @@ function showLocationChips(neighborhoods, city) {
       if (e.target.classList.contains("remove")) {
         chip.remove();
       } else {
-        $("locationInput").value = chip.dataset.area + ", " + chip.dataset.city;
+        const textarea = $("locationInput");
+        const current = textarea.value.trim();
+        const newLoc = chip.dataset.area + ", " + chip.dataset.city;
+        if (!current.includes(newLoc)) {
+          textarea.value = current ? current + "\n" + newLoc : newLoc;
+        }
       }
     });
   });
@@ -255,9 +259,7 @@ function showLocationChips(neighborhoods, city) {
 async function checkResumeCampaign() {
   const { campaignState } = await chrome.storage.local.get(["campaignState"]);
   if (campaignState && campaignState.isActive && !campaignState.completed) {
-    // Show resume banner
-    const banner = $("resumeBanner");
-    banner.style.display = "block";
+    $("resumeBanner").style.display = "block";
     $("resumeInfo").textContent = `${campaignState.leadsCollected || 0} leads collected, page ${campaignState.currentPage || 0}/${campaignState.totalPages || 0}`;
   }
 }
@@ -265,24 +267,17 @@ async function checkResumeCampaign() {
 $("resumeYes").addEventListener("click", async () => {
   const { campaignState } = await chrome.storage.local.get(["campaignState"]);
   if (campaignState) {
-    // Restore settings
     await chrome.storage.local.set({
       autoScrape: true,
       autoNext: true,
       autoMaxPages: campaignState.totalPages || 5
     });
-
-    // Navigate to last known page
     const tab = await getActiveTab();
     const url = campaignState.lastUrl || `https://www.google.com/search?q=${encodeURIComponent(campaignState.query || "")}&start=${((campaignState.currentPage || 1) - 1) * 10}`;
-
-    if (tab) {
-      chrome.tabs.update(tab.id, { url });
-    } else {
-      chrome.tabs.create({ url });
-    }
-
+    if (tab) chrome.tabs.update(tab.id, { url });
+    else chrome.tabs.create({ url });
     setStatus("Resuming campaign...");
+    setStatusBadge("running");
     $("resumeBanner").style.display = "none";
     loadSettings();
   }
@@ -294,14 +289,16 @@ $("resumeNo").addEventListener("click", async () => {
   setStatus("Campaign dismissed.");
 });
 
-// ----- Progress UI -----
+// ===== Progress UI =====
 function renderProgress(p) {
   const box = $("progressBox");
   if (!p || !p.isRunning) {
     box.style.display = "none";
+    setStatusBadge("ready");
     return;
   }
   box.style.display = "block";
+  setStatusBadge("running");
   $("progressTitle").textContent = p.title || "Working...";
   $("progPage").textContent = p.currentPage || 0;
   $("progPageTotal").textContent = p.totalPages || "?";
@@ -320,56 +317,92 @@ async function pollProgress() {
   refreshCount();
 }
 
-// React to live updates from content/background scripts
+// React to live updates
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.progress) renderProgress(changes.progress.newValue);
   if (changes.leads) {
     refreshCount();
-    renderPreviewTable(); // Feature 14: live update preview
+    renderPreviewTable();
+  }
+  if (changes.accounts || changes.activeAccountIndex) renderAccounts();
+  if (changes.captchaDetected) {
+    const cd = changes.captchaDetected.newValue;
+    if (cd && cd.cooldownUntil > Date.now()) {
+      const minsLeft = Math.ceil((cd.cooldownUntil - Date.now()) / 60000);
+      setStatus(`CAPTCHA cooldown: ${minsLeft} min remaining`);
+      setStatusBadge("paused");
+    } else {
+      setStatus("Ready.");
+      setStatusBadge("ready");
+    }
   }
 });
 
-// ----- Buttons -----
+// ===== Main Buttons =====
 $("scrapeNow").addEventListener("click", async () => {
   const tab = await getActiveTab();
   if (!tab || !/^https?:\/\/(www\.)?google\.com\/search/.test(tab.url || "")) {
-    setStatus("Please open google.com/search first.");
+    // Build search URL from keywords + location
+    const keywords = $("searchInput").value.trim().split("\n").filter(Boolean);
+    const locations = $("locationInput").value.trim().split("\n").filter(Boolean);
+
+    if (!keywords.length) {
+      setStatus("Please enter at least one keyword.");
+      return;
+    }
+
+    const query = keywords[0] + (locations.length ? " " + locations[0] : "");
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+
+    if (tab) chrome.tabs.update(tab.id, { url });
+    else chrome.tabs.create({ url });
+
+    setStatus(`Navigating to Google: "${query}"...`);
+    setStatusBadge("running");
     return;
   }
+
   setStatus("Scraping current page...");
+  setStatusBadge("running");
   try {
     const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
     if (res) {
       setStatus(`Found ${res.found} result(s), ${res.added} new saved.`);
     } else {
-      setStatus("No response from page. Try reloading the search page.");
+      setStatus("No response. Try reloading the search page.");
     }
   } catch (e) {
-    setStatus("Could not reach page. Reload the Google search tab.");
+    setStatus("Could not reach page. Reload the Google tab.");
   }
+  setStatusBadge("ready");
   refreshCount();
   renderPreviewTable();
 });
 
+// Settings listeners
 $("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
 $("autoNext").addEventListener("change", (e) => saveSetting("autoNext", e.target.checked));
-$("autoMaxPages").addEventListener("change", (e) =>
-  saveSetting("autoMaxPages", Number(e.target.value) || 5)
-);
+$("autoMaxPages").addEventListener("change", (e) => saveSetting("autoMaxPages", Number(e.target.value) || 50));
+$("profileWait").addEventListener("change", (e) => saveSetting("profileWait", Number(e.target.value)));
+$("targetLeads").addEventListener("change", (e) => saveSetting("targetLeads", Number(e.target.value) || 100));
+$("searchScroll").addEventListener("change", (e) => saveSetting("searchScroll", Number(e.target.value) || 25));
+
 ALL_FIELDS.forEach(f => {
   const el = $(`f_${f}`);
   if (el) el.addEventListener("change", saveFields);
 });
 
 $("runDeep").addEventListener("click", async () => {
-  setStatus("Starting deep-scrape... (this may take a while)");
+  setStatus("Starting deep-scrape...");
+  setStatusBadge("running");
   const res = await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" });
   if (res && res.ok) {
     setStatus(`Deep-scrape done. Updated ${res.updated} leads.`);
   } else {
     setStatus(`Deep-scrape failed: ${res ? res.error : "unknown error"}`);
   }
+  setStatusBadge("ready");
   refreshCount();
   renderPreviewTable();
 });
@@ -393,7 +426,7 @@ $("clear").addEventListener("click", async () => {
   renderPreviewTable();
 });
 
-// ===== Feature 5: Account Management UI =====
+// ===== Feature 5: Account Management =====
 async function renderAccounts() {
   const { accounts = [], activeAccountIndex = 0, accountRotationThreshold = 50 } =
     await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
@@ -403,20 +436,20 @@ async function renderAccounts() {
   thresholdInput.value = accountRotationThreshold;
 
   if (!accounts.length) {
-    list.innerHTML = '<div style="font-size:11px;color:#999;margin:4px 0;">No accounts added yet.</div>';
+    list.innerHTML = '<div style="font-size:11px;color:#9ca3af;margin:4px 0;">No accounts added yet.</div>';
     $("accountInfo").innerHTML = '<small>Add Google accounts to rotate every ' + accountRotationThreshold + ' leads.</small>';
     return;
   }
 
-  $("accountInfo").innerHTML = `<small>Active: <b>${accounts[activeAccountIndex]?.label || "—"}</b> (${accounts[activeAccountIndex]?.leadsCollected || 0}/${accountRotationThreshold} leads)</small>`;
+  $("accountInfo").innerHTML = `<small>Active: <b>${accounts[activeAccountIndex]?.label || "\u2014"}</b> (${accounts[activeAccountIndex]?.leadsCollected || 0}/${accountRotationThreshold} leads)</small>`;
 
   list.innerHTML = accounts.map((acc, i) => {
     const isActive = i === activeAccountIndex;
     return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;">
-      <span style="width:8px;height:8px;border-radius:50%;background:${isActive ? '#34a853' : '#dadce0'};"></span>
+      <span style="width:8px;height:8px;border-radius:50%;background:${isActive ? '#22c55e' : '#d1d5db'};flex-shrink:0;"></span>
       <span style="flex:1;${isActive ? 'font-weight:600;' : ''}">${acc.label}</span>
-      <span style="color:#5f6368;">${acc.leadsCollected || 0}</span>
-      <button class="mini-btn danger remove-acc-btn" data-id="${acc.id}" style="width:auto;padding:2px 5px;">×</button>
+      <span style="color:#6b7280;">${acc.leadsCollected || 0}</span>
+      <button class="btn-sm btn-danger remove-acc-btn" data-id="${acc.id}">\u00d7</button>
     </div>`;
   }).join("");
 
@@ -447,25 +480,17 @@ $("rotationThreshold").addEventListener("change", async (e) => {
   renderAccounts();
 });
 
-// Listen for account changes
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local") return;
-  if (changes.accounts || changes.activeAccountIndex) {
-    renderAccounts();
+// ===== Feature 4: CAPTCHA check on popup open =====
+async function checkCaptchaCooldown() {
+  const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
+  if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
+    const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
+    setStatus(`CAPTCHA cooldown active: ${minsLeft} min remaining`);
+    setStatusBadge("paused");
   }
-  // Feature 4: Show CAPTCHA status in popup
-  if (changes.captchaDetected) {
-    const cd = changes.captchaDetected.newValue;
-    if (cd && cd.cooldownUntil > Date.now()) {
-      const minsLeft = Math.ceil((cd.cooldownUntil - Date.now()) / 60000);
-      setStatus(`CAPTCHA cooldown: ${minsLeft} min remaining`);
-    } else {
-      setStatus("Ready.");
-    }
-  }
-});
+}
 
-// init
+// ===== Init =====
 loadSettings();
 refreshCount();
 pollProgress();
@@ -473,12 +498,3 @@ renderPreviewTable();
 checkResumeCampaign();
 renderAccounts();
 checkCaptchaCooldown();
-
-// Feature 4: Check CAPTCHA cooldown on popup open
-async function checkCaptchaCooldown() {
-  const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
-  if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
-    const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
-    setStatus(`CAPTCHA cooldown active: ${minsLeft} min remaining`);
-  }
-}

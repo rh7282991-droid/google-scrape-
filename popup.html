@@ -6,14 +6,19 @@
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <header>
-    <h1>Google Lead Scraper</h1>
-    <span id="count" class="badge">0 leads</span>
+  <!-- Header with logo & status -->
+  <header class="app-header">
+    <div class="header-left">
+      <img src="icons/icon48.png" alt="logo" class="logo" />
+      <div class="header-info">
+        <h1>Google Lead Scraper</h1>
+        <small>Smart lead collector from Google Search</small>
+      </div>
+    </div>
+    <span id="statusBadge" class="status-badge ready">Ready</span>
   </header>
 
-  <section class="status" id="status">Ready.</section>
-
-  <!-- Live progress -->
+  <!-- Live progress bar (hidden by default) -->
   <section class="progress-box" id="progressBox" style="display:none;">
     <div class="progress-header">
       <span class="dot"></span>
@@ -27,11 +32,102 @@
     <div class="progress-current" id="progCurrent"></div>
   </section>
 
-  <!-- Feature 14: Live Preview Panel -->
-  <section class="preview-panel" id="previewPanel">
-    <div class="preview-header">
-      <span>Live Preview (last 10)</span>
-      <button id="togglePreview" class="mini-btn">Hide</button>
+  <!-- Resume Banner (Feature 17) -->
+  <section class="resume-banner" id="resumeBanner" style="display:none;">
+    <div class="resume-content">
+      <span class="resume-icon">&#9889;</span>
+      <div class="resume-text">
+        <strong>Resume previous campaign?</strong>
+        <small id="resumeInfo">0 leads collected, page 0/0</small>
+      </div>
+    </div>
+    <div class="resume-actions">
+      <button id="resumeYes" class="btn-sm btn-primary">Resume</button>
+      <button id="resumeNo" class="btn-sm btn-danger">Dismiss</button>
+    </div>
+  </section>
+
+  <!-- Main Campaign Setup -->
+  <section class="campaign-setup">
+    <h2 class="section-title">Campaign Setup</h2>
+
+    <!-- Business Keywords -->
+    <div class="form-group">
+      <label class="form-label">Business Keywords</label>
+      <textarea id="searchInput" rows="3" placeholder="cafe&#10;plumber&#10;dentist near me"></textarea>
+      <button id="pasteKeywords" class="btn-block btn-accent">Paste Keywords</button>
+    </div>
+
+    <!-- Locations -->
+    <div class="form-group">
+      <label class="form-label">Locations</label>
+      <textarea id="locationInput" rows="3" placeholder="dhaka&#10;gulshan&#10;mirpur"></textarea>
+      <button id="pasteLocations" class="btn-block btn-accent">Paste Locations</button>
+      <div class="location-chips" id="locationChips"></div>
+    </div>
+
+    <!-- Search Suggestions (Feature 15) -->
+    <div class="suggest-wrap" id="suggestWrap" style="display:none;">
+      <ul class="suggest-list" id="suggestList"></ul>
+    </div>
+    <div class="suggest-wrap" id="locationSuggestWrap" style="display:none;">
+      <ul class="suggest-list" id="locationSuggestList"></ul>
+    </div>
+
+    <!-- Settings Grid -->
+    <div class="settings-grid">
+      <div class="setting-item">
+        <label>Target Leads</label>
+        <input type="number" id="targetLeads" min="1" max="1000" value="100" />
+      </div>
+      <div class="setting-item">
+        <label>Max per Search</label>
+        <input type="number" id="autoMaxPages" min="1" max="50" value="50" />
+      </div>
+      <div class="setting-item">
+        <label>Profile Wait</label>
+        <select id="profileWait">
+          <option value="3">3 sec Fast</option>
+          <option value="5">5 sec Normal</option>
+          <option value="7" selected>7 sec Safer</option>
+          <option value="10">10 sec Slow</option>
+        </select>
+      </div>
+      <div class="setting-item">
+        <label>Search Scroll</label>
+        <input type="number" id="searchScroll" min="5" max="100" value="25" />
+      </div>
+    </div>
+  </section>
+
+  <!-- Action Buttons -->
+  <section class="action-section">
+    <button id="scrapeNow" class="btn-block btn-primary btn-large">
+      <span class="btn-icon">&#9654;</span> Start Scraping
+    </button>
+
+    <div class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="autoScrape" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span>Auto-scrape on every page</span>
+    </div>
+
+    <div class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="autoNext" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span>Auto-click "Next page"</span>
+    </div>
+  </section>
+
+  <!-- Live Preview Panel (Feature 14) -->
+  <section class="card" id="previewPanel">
+    <div class="card-header">
+      <span>Live Preview (<span id="count">0</span> leads)</span>
+      <button id="togglePreview" class="btn-sm btn-ghost">Hide</button>
     </div>
     <div class="preview-table-wrap" id="previewTableWrap">
       <table class="preview-table" id="previewTable">
@@ -43,115 +139,62 @@
     </div>
   </section>
 
-  <!-- Feature 17: Resume from Failure -->
-  <section class="resume-banner" id="resumeBanner" style="display:none;">
-    <div class="resume-content">
-      <span class="resume-icon">⚡</span>
-      <div class="resume-text">
-        <strong>Resume previous campaign?</strong>
-        <small id="resumeInfo">0 leads collected, page 0/0</small>
-      </div>
-    </div>
-    <div class="resume-actions">
-      <button id="resumeYes" class="mini-btn primary">Resume</button>
-      <button id="resumeNo" class="mini-btn danger">Dismiss</button>
-    </div>
-  </section>
-
-  <section class="controls">
-    <!-- Feature 15: Smart Search Suggestions -->
-    <div class="search-suggest-box">
-      <label for="searchInput">Search keyword:</label>
-      <div class="suggest-wrap">
-        <input type="text" id="searchInput" placeholder="e.g. cafe, plumber, dentist..." autocomplete="off" />
-        <ul class="suggest-list" id="suggestList"></ul>
-      </div>
-    </div>
-
-    <!-- Feature 16: Location Auto-Expand -->
-    <div class="location-expand-box">
-      <label for="locationInput">Location:</label>
-      <div class="suggest-wrap">
-        <input type="text" id="locationInput" placeholder="e.g. Dhaka, Chittagong..." autocomplete="off" />
-        <ul class="suggest-list" id="locationSuggestList"></ul>
-      </div>
-      <div class="location-chips" id="locationChips"></div>
-    </div>
-
-    <hr />
-
-    <details class="field-picker" open>
-      <summary>Fields to extract</summary>
-      <div class="grid2">
-        <label class="chip"><input type="checkbox" id="f_title" /><span>Title</span></label>
-        <label class="chip"><input type="checkbox" id="f_url" /><span>URL</span></label>
-        <label class="chip"><input type="checkbox" id="f_description" /><span>Description</span></label>
-        <label class="chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
-        <label class="chip"><input type="checkbox" id="f_emails" /><span>Emails</span></label>
-        <label class="chip"><input type="checkbox" id="f_phones" /><span>Phones</span></label>
-        <label class="chip"><input type="checkbox" id="f_position" /><span>Position</span></label>
-        <label class="chip"><input type="checkbox" id="f_query" /><span>Search query</span></label>
+  <!-- Fields to Extract -->
+  <section class="card">
+    <details open>
+      <summary class="card-header clickable">Fields to extract</summary>
+      <div class="fields-grid">
+        <label class="field-chip"><input type="checkbox" id="f_title" checked /><span>Title</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_url" checked /><span>URL</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_description" checked /><span>Description</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_domain" checked /><span>Domain</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_emails" checked /><span>Emails</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_phones" checked /><span>Phones</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_position" /><span>Position</span></label>
+        <label class="field-chip"><input type="checkbox" id="f_query" /><span>Search query</span></label>
       </div>
     </details>
+  </section>
 
-    <button id="scrapeNow" class="primary">Scrape this page</button>
+  <!-- Deep Scrape -->
+  <section class="card">
+    <button id="runDeep" class="btn-block btn-secondary">
+      Deep-scrape saved leads (find more emails/phones)
+    </button>
+  </section>
 
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoScrape" />
-        <span>Auto-scrape on every Google page</span>
-      </label>
-    </div>
-
-    <div class="row">
-      <label class="switch">
-        <input type="checkbox" id="autoNext" />
-        <span>Auto-click "Next page"</span>
-      </label>
-    </div>
-
-    <div class="row inline">
-      <label for="autoMaxPages">Max pages:</label>
-      <input type="number" id="autoMaxPages" min="1" max="50" value="5" />
-    </div>
-
-    <hr />
-
-    <button id="runDeep" class="secondary">Deep-scrape saved leads (find more emails/phones)</button>
-
-    <hr />
-
-    <!-- Feature 5: Multi-Account Rotation -->
-    <details class="field-picker">
-      <summary>Account Rotation (Future)</summary>
+  <!-- Account Rotation (Feature 5) -->
+  <section class="card">
+    <details>
+      <summary class="card-header clickable">Account Rotation</summary>
       <div class="account-section">
         <div class="account-info" id="accountInfo">
           <small>Add Google accounts to rotate every 50 leads.</small>
         </div>
         <div class="account-list" id="accountList"></div>
-        <div class="row inline">
-          <input type="text" id="newAccountLabel" placeholder="Account label (e.g. work@gmail.com)" style="flex:1;padding:5px 8px;border:1px solid #dadce0;border-radius:4px;font-size:11px;" />
-          <button id="addAccountBtn" class="mini-btn primary" style="width:auto;">Add</button>
+        <div class="inline-row">
+          <input type="text" id="newAccountLabel" placeholder="Account label (e.g. work@gmail.com)" class="input-sm" />
+          <button id="addAccountBtn" class="btn-sm btn-primary">Add</button>
         </div>
-        <div class="row inline" style="margin-top:6px;">
-          <label style="font-size:11px;">Rotate every:</label>
-          <input type="number" id="rotationThreshold" min="10" max="200" value="50" style="width:50px;padding:3px;border:1px solid #dadce0;border-radius:4px;font-size:11px;" />
-          <span style="font-size:11px;">leads</span>
+        <div class="inline-row" style="margin-top:6px;">
+          <label class="label-sm">Rotate every:</label>
+          <input type="number" id="rotationThreshold" min="10" max="200" value="50" class="input-xs" />
+          <span class="label-sm">leads</span>
         </div>
       </div>
     </details>
-
-    <hr />
-
-    <div class="actions">
-      <button id="exportCsv" class="secondary">Export CSV</button>
-      <button id="exportJson" class="secondary">Export JSON</button>
-      <button id="clear" class="danger">Clear all</button>
-    </div>
   </section>
 
-  <footer>
-    <small>Tip: open <a href="https://www.google.com/search?q=%22founder%22+site%3Alinkedin.com+dhaka" target="_blank">google.com/search</a>, then click "Scrape this page".</small>
+  <!-- Export & Clear -->
+  <section class="export-section">
+    <button id="exportCsv" class="btn-half btn-secondary">Export CSV</button>
+    <button id="exportJson" class="btn-half btn-secondary">Export JSON</button>
+    <button id="clear" class="btn-block btn-danger-outline">Clear all leads</button>
+  </section>
+
+  <!-- Status bar -->
+  <footer class="status-bar">
+    <span id="status">Ready.</span>
   </footer>
 
   <script src="popup.js"></script>
