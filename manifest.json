@@ -7,7 +7,9 @@
     "storage",
     "downloads",
     "scripting",
-    "tabs"
+    "tabs",
+    "notifications",
+    "alarms"
   ],
   "host_permissions": [
     "https://www.google.com/*",
@@ -36,7 +38,9 @@
     {
       "matches": [
         "https://www.google.com/search*",
-        "https://google.com/search*"
+        "https://google.com/search*",
+        "https://www.google.com/sorry/*",
+        "https://sorry.google.com/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

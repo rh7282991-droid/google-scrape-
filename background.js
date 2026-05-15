@@ -174,6 +174,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         // Feature 17: Save campaign state for resume
         await chrome.storage.local.set({ campaignState: msg.state });
         sendResponse({ ok: true });
+      } else if (msg.type === "CAPTCHA_DETECTED") {
+        // Feature 4: CAPTCHA detected - show notification
+        await showCaptchaNotification(msg.info);
+        sendResponse({ ok: true });
+      } else if (msg.type === "ACCOUNT_LEADS_INCREMENT") {
+        // Feature 5: Track per-account leads, rotate at 50
+        const r = await incrementAccountLeads(msg.count || 0);
+        sendResponse(r);
+      } else if (msg.type === "ACCOUNT_FLAGGED") {
+        // Feature 5: Account flagged (e.g., by CAPTCHA) - rotate immediately
+        const r = await rotateAccount("flagged: " + (msg.reason || "unknown"));
+        sendResponse(r);
+      } else if (msg.type === "ADD_ACCOUNT") {
+        // Feature 5: Add a Google account label
+        const r = await addAccount(msg.label);
+        sendResponse(r);
+      } else if (msg.type === "REMOVE_ACCOUNT") {
+        const r = await removeAccount(msg.id);
+        sendResponse(r);
+      } else if (msg.type === "ROTATE_ACCOUNT") {
+        const r = await rotateAccount("manual");
+        sendResponse(r);
       } else {
         sendResponse({ ok: false, error: "unknown message" });
       }
@@ -249,7 +271,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields"]);
+  const cur = await chrome.storage.local.get(["leads", "autoMaxPages", "fields", "accounts"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
   if (!cur.autoMaxPages) await chrome.storage.local.set({ autoMaxPages: 5 });
   if (!cur.fields) {
@@ -260,4 +282,143 @@ chrome.runtime.onInstalled.addListener(async () => {
       }
     });
   }
+  if (!cur.accounts) {
+    await chrome.storage.local.set({
+      accounts: [],
+      activeAccountIndex: 0,
+      accountLeadsCount: 0,
+      accountRotationThreshold: 50
+    });
+  }
+  // Feature 4: Setup alarm to check CAPTCHA cooldown expiry every minute
+  chrome.alarms.create("captcha-cooldown-check", { periodInMinutes: 1 });
 });
+
+// ===== Feature 4: CAPTCHA notification =====
+async function showCaptchaNotification(info) {
+  const cooldownEnd = new Date(info.cooldownUntil).toLocaleTimeString();
+  try {
+    await chrome.notifications.create("captcha-detected-" + Date.now(), {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Suspicious activity detected",
+      message: `Taking a 30-min break. Auto-scrape paused. Resume after ${cooldownEnd}.`,
+      priority: 2
+    });
+  } catch (e) {
+    // Notifications permission may not be granted; fail silently
+    console.warn("[GLS] Notification failed:", e);
+  }
+}
+
+// Auto-clear CAPTCHA cooldown when expired (check every minute)
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === "captcha-cooldown-check") {
+    const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
+    if (captchaDetected && captchaDetected.cooldownUntil <= Date.now()) {
+      await chrome.storage.local.remove(["captchaDetected"]);
+      try {
+        await chrome.notifications.create("cooldown-ended-" + Date.now(), {
+          type: "basic",
+          iconUrl: "icons/icon128.png",
+          title: "Cooldown ended",
+          message: "You can resume scraping now.",
+          priority: 1
+        });
+      } catch (_) {}
+    }
+  }
+});
+
+// ===== Feature 5: Multi-Account Rotation =====
+async function addAccount(label) {
+  if (!label || !label.trim()) return { ok: false, error: "Label required" };
+  const { accounts = [] } = await chrome.storage.local.get(["accounts"]);
+  const id = "acc_" + Date.now();
+  accounts.push({
+    id,
+    label: label.trim(),
+    leadsCollected: 0,
+    flaggedCount: 0,
+    addedAt: Date.now(),
+    lastUsedAt: null
+  });
+  await chrome.storage.local.set({ accounts });
+  return { ok: true, account: accounts[accounts.length - 1] };
+}
+
+async function removeAccount(id) {
+  const { accounts = [], activeAccountIndex = 0 } = await chrome.storage.local.get(["accounts", "activeAccountIndex"]);
+  const idx = accounts.findIndex(a => a.id === id);
+  if (idx === -1) return { ok: false, error: "Not found" };
+  accounts.splice(idx, 1);
+  let newIdx = activeAccountIndex;
+  if (newIdx >= accounts.length) newIdx = 0;
+  await chrome.storage.local.set({ accounts, activeAccountIndex: newIdx });
+  return { ok: true };
+}
+
+async function incrementAccountLeads(count) {
+  if (!count) return { ok: true };
+  const {
+    accounts = [],
+    activeAccountIndex = 0,
+    accountRotationThreshold = 50
+  } = await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
+
+  if (!accounts.length) return { ok: true, hasAccounts: false };
+
+  const active = accounts[activeAccountIndex];
+  if (!active) return { ok: true };
+
+  active.leadsCollected = (active.leadsCollected || 0) + count;
+  active.lastUsedAt = Date.now();
+  await chrome.storage.local.set({ accounts });
+
+  // Check threshold
+  if (active.leadsCollected >= accountRotationThreshold) {
+    return await rotateAccount(`reached ${accountRotationThreshold} leads`);
+  }
+  return { ok: true, leadsCollected: active.leadsCollected };
+}
+
+async function rotateAccount(reason) {
+  const { accounts = [], activeAccountIndex = 0 } = await chrome.storage.local.get(["accounts", "activeAccountIndex"]);
+  if (accounts.length < 2) {
+    return { ok: false, error: "Need 2+ accounts to rotate", hasAccounts: accounts.length > 0 };
+  }
+
+  // Mark current as flagged if reason is captcha-related
+  if (reason && reason.includes("flagged")) {
+    accounts[activeAccountIndex].flaggedCount = (accounts[activeAccountIndex].flaggedCount || 0) + 1;
+  }
+
+  // Reset count for current and rotate
+  accounts[activeAccountIndex].leadsCollected = 0;
+  const nextIndex = (activeAccountIndex + 1) % accounts.length;
+
+  await chrome.storage.local.set({
+    accounts,
+    activeAccountIndex: nextIndex,
+    lastRotation: { at: Date.now(), from: accounts[activeAccountIndex].label, to: accounts[nextIndex].label, reason }
+  });
+
+  // Notify user
+  try {
+    await chrome.notifications.create("account-rotated-" + Date.now(), {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Account rotated",
+      message: `Switched to "${accounts[nextIndex].label}". Reason: ${reason}.`,
+      priority: 1
+    });
+  } catch (_) {}
+
+  return {
+    ok: true,
+    rotated: true,
+    from: accounts[activeAccountIndex].label,
+    to: accounts[nextIndex].label,
+    reason
+  };
+}

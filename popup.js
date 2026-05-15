@@ -393,9 +393,92 @@ $("clear").addEventListener("click", async () => {
   renderPreviewTable();
 });
 
+// ===== Feature 5: Account Management UI =====
+async function renderAccounts() {
+  const { accounts = [], activeAccountIndex = 0, accountRotationThreshold = 50 } =
+    await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
+
+  const list = $("accountList");
+  const thresholdInput = $("rotationThreshold");
+  thresholdInput.value = accountRotationThreshold;
+
+  if (!accounts.length) {
+    list.innerHTML = '<div style="font-size:11px;color:#999;margin:4px 0;">No accounts added yet.</div>';
+    $("accountInfo").innerHTML = '<small>Add Google accounts to rotate every ' + accountRotationThreshold + ' leads.</small>';
+    return;
+  }
+
+  $("accountInfo").innerHTML = `<small>Active: <b>${accounts[activeAccountIndex]?.label || "—"}</b> (${accounts[activeAccountIndex]?.leadsCollected || 0}/${accountRotationThreshold} leads)</small>`;
+
+  list.innerHTML = accounts.map((acc, i) => {
+    const isActive = i === activeAccountIndex;
+    return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:${isActive ? '#34a853' : '#dadce0'};"></span>
+      <span style="flex:1;${isActive ? 'font-weight:600;' : ''}">${acc.label}</span>
+      <span style="color:#5f6368;">${acc.leadsCollected || 0}</span>
+      <button class="mini-btn danger remove-acc-btn" data-id="${acc.id}" style="width:auto;padding:2px 5px;">×</button>
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".remove-acc-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await chrome.runtime.sendMessage({ type: "REMOVE_ACCOUNT", id: btn.dataset.id });
+      renderAccounts();
+    });
+  });
+}
+
+$("addAccountBtn").addEventListener("click", async () => {
+  const label = $("newAccountLabel").value.trim();
+  if (!label) return;
+  const res = await chrome.runtime.sendMessage({ type: "ADD_ACCOUNT", label });
+  if (res && res.ok) {
+    $("newAccountLabel").value = "";
+    renderAccounts();
+    setStatus(`Account "${label}" added.`);
+  } else {
+    setStatus(`Failed: ${res?.error || "unknown"}`);
+  }
+});
+
+$("rotationThreshold").addEventListener("change", async (e) => {
+  const val = Math.max(10, Math.min(200, Number(e.target.value) || 50));
+  await chrome.storage.local.set({ accountRotationThreshold: val });
+  renderAccounts();
+});
+
+// Listen for account changes
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.accounts || changes.activeAccountIndex) {
+    renderAccounts();
+  }
+  // Feature 4: Show CAPTCHA status in popup
+  if (changes.captchaDetected) {
+    const cd = changes.captchaDetected.newValue;
+    if (cd && cd.cooldownUntil > Date.now()) {
+      const minsLeft = Math.ceil((cd.cooldownUntil - Date.now()) / 60000);
+      setStatus(`CAPTCHA cooldown: ${minsLeft} min remaining`);
+    } else {
+      setStatus("Ready.");
+    }
+  }
+});
+
 // init
 loadSettings();
 refreshCount();
 pollProgress();
 renderPreviewTable();
 checkResumeCampaign();
+renderAccounts();
+checkCaptchaCooldown();
+
+// Feature 4: Check CAPTCHA cooldown on popup open
+async function checkCaptchaCooldown() {
+  const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
+  if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
+    const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
+    setStatus(`CAPTCHA cooldown active: ${minsLeft} min remaining`);
+  }
+}

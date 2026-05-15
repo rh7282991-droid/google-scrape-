@@ -180,6 +180,7 @@ footer a:hover { text-decoration: underline; }
   color: #5f6368;
 }
 .mini-btn {
+  width: auto;
   padding: 3px 8px;
   font-size: 10px;
   border: 1px solid #dadce0;
@@ -187,6 +188,7 @@ footer a:hover { text-decoration: underline; }
   background: #fff;
   cursor: pointer;
   color: #5f6368;
+  margin: 0;
 }
 .mini-btn.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
 .mini-btn.danger { background: #fce8e6; color: #c5221f; border-color: #fce8e6; }
@@ -312,4 +314,27 @@ footer a:hover { text-decoration: underline; }
 .resume-actions {
   display: flex;
   gap: 6px;
+}
+
+
+/* Feature 5: Account Rotation */
+.account-section {
+  margin-top: 8px;
+}
+.account-info {
+  margin-bottom: 6px;
+}
+.account-info small { color: #5f6368; font-size: 11px; }
+.account-info b { color: #1a73e8; }
+.account-list {
+  margin-bottom: 8px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+/* Feature 4: CAPTCHA status highlight */
+.status.captcha-warning {
+  background: #fce8e6;
+  color: #c5221f;
+  border-bottom-color: #f5c6cb;
 }

@@ -115,7 +115,7 @@
     return out;
   }
 
-  function showToast(message) {
+  function showToast(message, color) {
     let toast = document.getElementById("__gls_toast__");
     if (!toast) {
       toast = document.createElement("div");
@@ -126,14 +126,97 @@
         padding: "10px 14px", borderRadius: "8px",
         font: "13px/1.4 system-ui, sans-serif",
         zIndex: 999999, boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
-        opacity: "0", transition: "opacity .25s ease"
+        opacity: "0", transition: "opacity .25s ease",
+        maxWidth: "320px"
       });
       document.body.appendChild(toast);
     }
+    toast.style.background = color || "#1a73e8";
     toast.textContent = message;
     requestAnimationFrame(() => (toast.style.opacity = "1"));
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => (toast.style.opacity = "0"), 2200);
+    toast._t = setTimeout(() => (toast.style.opacity = "0"), 4000);
+  }
+
+  // ===== Feature 4: CAPTCHA Detection =====
+  function detectCaptcha() {
+    // Check URL — Google redirects to /sorry/ on CAPTCHA
+    if (location.pathname.includes("/sorry/") || location.hostname.includes("sorry.google")) {
+      return { detected: true, type: "sorry-page" };
+    }
+
+    // Check page content for CAPTCHA indicators
+    const bodyText = (document.body && document.body.innerText || "").toLowerCase();
+    const captchaPhrases = [
+      "unusual traffic",
+      "our systems have detected",
+      "please show you're not a robot",
+      "i'm not a robot",
+      "verify you are human",
+      "automated queries",
+      "to continue, please type the characters"
+    ];
+    for (const phrase of captchaPhrases) {
+      if (bodyText.includes(phrase)) {
+        return { detected: true, type: "challenge-text", phrase };
+      }
+    }
+
+    // Check for reCAPTCHA elements
+    if (
+      document.querySelector("#captcha") ||
+      document.querySelector(".g-recaptcha") ||
+      document.querySelector('iframe[src*="recaptcha"]') ||
+      document.querySelector('form[action*="/sorry/"]')
+    ) {
+      return { detected: true, type: "recaptcha-element" };
+    }
+
+    return { detected: false };
+  }
+
+  async function handleCaptcha(captchaInfo) {
+    const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+    const cooldownUntil = Date.now() + COOLDOWN_MS;
+
+    // Stop all auto operations
+    await chrome.storage.local.set({
+      autoScrape: false,
+      autoNext: false,
+      captchaDetected: {
+        detected: true,
+        type: captchaInfo.type,
+        detectedAt: Date.now(),
+        cooldownUntil,
+        url: location.href
+      }
+    });
+
+    // Update progress to show paused state
+    await setProgress({
+      isRunning: false,
+      title: "Paused: CAPTCHA detected",
+      currentItem: `Cooldown: 30 min. Resume after ${new Date(cooldownUntil).toLocaleTimeString()}`
+    });
+
+    // Notify user via toast
+    showToast(
+      "Suspicious activity detected, taking a break. Auto-scrape paused for 30 min.",
+      "#d93025"
+    );
+
+    // Notify popup/background
+    try {
+      await chrome.runtime.sendMessage({
+        type: "CAPTCHA_DETECTED",
+        info: { ...captchaInfo, cooldownUntil, url: location.href }
+      });
+    } catch (_) { /* popup may not be open */ }
+
+    // Mark account-rotation event (Feature 5)
+    try {
+      await chrome.runtime.sendMessage({ type: "ACCOUNT_FLAGGED", reason: "captcha" });
+    } catch (_) {}
   }
 
   async function setProgress(patch) {
@@ -169,6 +252,21 @@
   }
 
   async function runScrape({ silent = false } = {}) {
+    // Feature 4: CAPTCHA check before scraping
+    const captchaInfo = detectCaptcha();
+    if (captchaInfo.detected) {
+      await handleCaptcha(captchaInfo);
+      return { found: 0, added: 0, captcha: true };
+    }
+
+    // Feature 4: Honor existing cooldown
+    const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
+    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
+      const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
+      showToast(`Cooldown active. ${minsLeft} min remaining.`, "#d93025");
+      return { found: 0, added: 0, cooldown: true, minsLeft };
+    }
+
     const fields = await getFields();
     const results = extractResults();
 
@@ -194,8 +292,17 @@
     });
 
     if (!silent) {
-      showToast(`Scraped ${results.length} on page ${currentPage} • ${added} new saved`);
+      showToast(`Scraped ${results.length} on page ${currentPage} - ${added} new saved`);
     }
+
+    // Feature 5: Track per-account leads, rotate at 50
+    try {
+      await chrome.runtime.sendMessage({
+        type: "ACCOUNT_LEADS_INCREMENT",
+        count: added
+      });
+    } catch (_) {}
+
     return { found: results.length, added };
   }
 
@@ -256,7 +363,26 @@
   });
 
   (async () => {
-    const { autoScrape } = await chrome.storage.local.get(["autoScrape"]);
+    // Feature 4: Always check for CAPTCHA on page load (even if auto-scrape is off)
+    const captchaInfo = detectCaptcha();
+    if (captchaInfo.detected) {
+      await handleCaptcha(captchaInfo);
+      return;
+    }
+
+    const { autoScrape, captchaDetected } = await chrome.storage.local.get(["autoScrape", "captchaDetected"]);
+
+    // Feature 4: Honor cooldown
+    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
+      const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
+      await setProgress({
+        isRunning: false,
+        title: "Cooldown active",
+        currentItem: `${minsLeft} min remaining`
+      });
+      return;
+    }
+
     if (autoScrape) {
       setTimeout(async () => {
         await runScrape({ silent: false });
