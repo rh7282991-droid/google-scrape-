@@ -1,36 +1,70 @@
-# Google Lead Scraper
+# Google Maps Lead Scraper
 
-Free Chrome extension to collect business leads from Google Maps.
+A free Chrome extension that collects business leads (name, phone, website, address, rating, etc.) from **Google Maps** automatically.
 
-## Features
-- Extracts business name, phone, website, address, rating
-- Works on any Google Maps search
-- Export to CSV or JSON
-- No API, no proxy, no paid service needed
+No proxy. No API key. No login. Works on your own browser session.
 
-## Install
+---
 
-1. Download this folder
+## ✨ Features
+
+- **Bulk search** — multiple keywords × locations in one campaign
+- **Auto-scroll** — loads more results until end of list
+- **Auto-click each profile** — opens every business detail panel and extracts data
+- **Real Google Maps page** — you can watch the scraping happen in your tab
+- **Pause / Resume / Stop** — full control any time
+- **Export** — CSV, TSV (Google Sheets), or copy-paste directly to Sheets
+- **Filters** — only with phone, only with address, only with website
+- **Auto-resume** — survives page reloads
+- **No CAPTCHA bypass** — only public/visible information
+
+---
+
+## 🚀 Install
+
+1. Download or clone this repo
+   - GitHub: **Code → Download ZIP** → extract
+   - Or `git clone https://github.com/rh7282991-droid/google-scrape-.git`
 2. Open `chrome://extensions`
 3. Enable **Developer mode** (top right)
 4. Click **Load unpacked**
-5. Select this folder (where `manifest.json` is)
+5. Select the folder that contains `manifest.json`
 
-## How to Use
+---
 
-1. Open [Google Maps](https://www.google.com/maps)
-2. Search for businesses (e.g. "restaurants in dhaka")
-3. Scroll down in the results panel to load more businesses
-4. Click the extension icon → **Collect Leads from This Page**
-5. For more detail (phone numbers), click on individual businesses first
-6. Click **Export CSV** to download
+## 📋 How to use
 
-## Tips for Getting Phone Numbers
+1. Click the extension icon to open the popup
+2. **Campaign Setup**:
+   - **Business Keywords** — one per line (e.g. `cafe`, `restaurant`)
+   - **Locations** — one per line (e.g. `dhaka`, `chittagong`)
+   - **Target Leads** — total leads you want
+   - **Profile Wait** — pause time per profile (5 sec is balanced; 7+ is safer)
+3. Click **Start Profile Collection**
+4. The extension opens Google Maps in your active tab and starts collecting
+5. Watch the live progress in the popup. You can **Pause / Resume / Stop** any time
+6. When done, click **Download Excel CSV** or **Copy to Google Sheets**
 
-Google Maps shows phone numbers only when you **click on a business** to open its detail panel. To collect phones:
+### Tips
 
-1. Search for businesses
-2. Click on the first result (opens detail panel with phone)
-3. Click **Collect Leads** → captures that business with phone
-4. Go back, click next business, repeat
-5. Or use MapLeadly-style: just collect all names first, then deep-scrape later
+- More **profile wait** = safer (less chance of Google rate-limiting you)
+- Use specific keywords + cities (e.g. `vegan cafe in dhanmondi`) for better leads
+- The extension dedupes by business name + phone
+
+---
+
+## 📂 Files
+
+| File | Purpose |
+|------|---------|
+| `manifest.json` | Chrome extension manifest (MV3) |
+| `popup.html` / `popup.css` / `popup.js` | UI |
+| `content.js` | Engine — runs on Google Maps, scrolls, clicks, extracts |
+| `background.js` | Service worker — initializes state, keeps content.js alive |
+| `assets/logo.svg` | Extension icon |
+
+---
+
+## ⚠️ Disclaimer
+
+Use responsibly. This tool only reads **public** Google Maps data the same way a human user could. Respect Google's Terms of Service and any local laws regarding contacting businesses. Don't spam.

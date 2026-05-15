@@ -1,235 +1,281 @@
-document.addEventListener("DOMContentLoaded", async () => {
-  const collectBtn = document.getElementById("collectBtn");
-  const exportCsv = document.getElementById("exportCsv");
-  const exportJson = document.getElementById("exportJson");
-  const clearBtn = document.getElementById("clearBtn");
-  const progress = document.getElementById("progress");
-  const progressFill = document.getElementById("progressFill");
-  const progressText = document.getElementById("progressText");
+// popup.js — UI controller. Talks to content script via background.
 
-  async function updateStats() {
-    const { leads = [] } = await chrome.storage.local.get(["leads"]);
-    document.getElementById("totalLeads").textContent = leads.length;
-    document.getElementById("totalPhones").textContent = leads.filter(l => l.phone).length;
-    document.getElementById("totalEmails").textContent = leads.filter(l => l.email).length;
-  }
+const $ = (id) => document.getElementById(id);
 
-  collectBtn.addEventListener("click", async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url || !tab.url.includes("google.") || !tab.url.includes("/maps")) {
-      alert("Please open Google Maps first and search for businesses.");
-      return;
-    }
+const DEFAULTS = {
+  keywords: "cafe",
+  locations: "dhaka",
+  targetLeads: 100,
+  maxPerSearch: 50,
+  profileWait: 5,
+  scrollLimit: 25,
+  filterPhone: false,
+  filterAddress: false,
+  filterWebsite: false
+};
 
-    collectBtn.disabled = true;
-    collectBtn.textContent = "Collecting...";
-    progress.style.display = "block";
-    progressFill.style.width = "10%";
-    progressText.textContent = "Scanning page for businesses...";
+// ---------- Settings ----------
+async function loadSettings() {
+  const s = await chrome.storage.local.get(Object.keys(DEFAULTS));
+  $("keywords").value = s.keywords ?? DEFAULTS.keywords;
+  $("locations").value = s.locations ?? DEFAULTS.locations;
+  $("targetLeads").value = s.targetLeads ?? DEFAULTS.targetLeads;
+  $("maxPerSearch").value = s.maxPerSearch ?? DEFAULTS.maxPerSearch;
+  $("profileWait").value = s.profileWait ?? DEFAULTS.profileWait;
+  $("scrollLimit").value = s.scrollLimit ?? DEFAULTS.scrollLimit;
+  $("filterPhone").checked = !!s.filterPhone;
+  $("filterAddress").checked = !!s.filterAddress;
+  $("filterWebsite").checked = !!s.filterWebsite;
+}
 
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: scrapeGoogleMaps
-      });
-
-      if (results && results[0] && results[0].result) {
-        const newLeads = results[0].result;
-        progressFill.style.width = "80%";
-        progressText.textContent = `Found ${newLeads.length} businesses. Saving...`;
-
-        // Save to storage (dedup by name+phone)
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
-        const existing = new Set(leads.map(l => l.name + "|" + l.phone));
-        let added = 0;
-        for (const lead of newLeads) {
-          const key = lead.name + "|" + lead.phone;
-          if (!existing.has(key)) {
-            leads.push(lead);
-            existing.add(key);
-            added++;
-          }
-        }
-        await chrome.storage.local.set({ leads });
-
-        progressFill.style.width = "100%";
-        progressText.textContent = `Done! Added ${added} new leads (${newLeads.length} found on page).`;
-      } else {
-        progressText.textContent = "No businesses found. Try scrolling the results list first.";
-      }
-    } catch (e) {
-      progressText.textContent = "Error: " + (e.message || "Could not access page");
-    }
-
-    collectBtn.disabled = false;
-    collectBtn.textContent = "Collect Leads from This Page";
-    updateStats();
+async function saveSettings() {
+  await chrome.storage.local.set({
+    keywords: $("keywords").value,
+    locations: $("locations").value,
+    targetLeads: Number($("targetLeads").value) || 100,
+    maxPerSearch: Number($("maxPerSearch").value) || 50,
+    profileWait: Number($("profileWait").value) || 5,
+    scrollLimit: Number($("scrollLimit").value) || 25,
+    filterPhone: $("filterPhone").checked,
+    filterAddress: $("filterAddress").checked,
+    filterWebsite: $("filterWebsite").checked
   });
+}
 
-  exportCsv.addEventListener("click", async () => {
-    const { leads = [] } = await chrome.storage.local.get(["leads"]);
-    if (!leads.length) { alert("No leads to export"); return; }
-    const headers = ["name", "phone", "website", "email", "address", "rating", "reviews", "category", "collectedAt"];
-    const rows = [headers.join(",")];
-    for (const l of leads) {
-      rows.push(headers.map(h => {
-        const v = l[h] || "";
-        return '"' + String(v).replace(/"/g, '""') + '"';
-      }).join(","));
-    }
-    const csv = rows.join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `google-leads-${new Date().toISOString().slice(0,10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  exportJson.addEventListener("click", async () => {
-    const { leads = [] } = await chrome.storage.local.get(["leads"]);
-    if (!leads.length) { alert("No leads to export"); return; }
-    const blob = new Blob([JSON.stringify(leads, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `google-leads-${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  clearBtn.addEventListener("click", async () => {
-    if (!confirm("Delete all saved leads?")) return;
-    await chrome.storage.local.set({ leads: [] });
-    updateStats();
-  });
-
-  updateStats();
+// Auto-save when fields change
+["keywords","locations","targetLeads","maxPerSearch","profileWait","scrollLimit",
+ "filterPhone","filterAddress","filterWebsite"].forEach(id => {
+  $(id).addEventListener("change", saveSettings);
+  $(id).addEventListener("input", saveSettings);
 });
 
-// This function runs INSIDE the Google Maps page
-function scrapeGoogleMaps() {
-  const leads = [];
+// ---------- Progress rendering ----------
+function renderState(state) {
+  if (!state) return;
+  const collected = state.collected || 0;
+  const target = state.target || 0;
+  const pct = target > 0 ? Math.min(100, Math.round((collected / target) * 100)) : 0;
 
-  // Google Maps search results are in the left panel
-  // Each result card contains business info
-  const cards = document.querySelectorAll('[data-result-channel-provider-id]') ||
-                document.querySelectorAll('div[role="feed"] > div') ||
-                document.querySelectorAll('.Nv2PK');
+  $("progressPct").textContent = pct + "%";
+  $("progressFill").style.width = pct + "%";
+  $("statCollected").textContent = collected;
+  $("statPhone").textContent = state.phoneCount || 0;
+  $("statAddress").textContent = state.addressCount || 0;
+  $("statQueue").textContent = state.queue || 0;
 
-  // Also try: the currently open business panel (right side)
-  const panel = document.querySelector('[role="main"]');
-
-  // Strategy 1: If a single business is open (detail view)
-  if (panel) {
-    const nameEl = panel.querySelector('h1') || panel.querySelector('[data-attrid="title"]');
-    const phoneEls = panel.querySelectorAll('button[data-tooltip*="phone"], button[aria-label*="Phone"], a[href^="tel:"], [data-item-id*="phone"]');
-    const websiteEls = panel.querySelectorAll('a[data-item-id*="authority"], a[aria-label*="Website"], a[data-tooltip*="website"]');
-    const addressEls = panel.querySelectorAll('button[data-item-id*="address"], [data-item-id*="address"], button[aria-label*="Address"]');
-    const ratingEl = panel.querySelector('span[role="img"][aria-label*="star"]') || panel.querySelector('.fontDisplayLarge');
-    const reviewEl = panel.querySelector('span[aria-label*="review"]');
-    const categoryEl = panel.querySelector('button[jsaction*="category"]') || panel.querySelector('.DkEaL');
-
-    // Extract phone from various possible locations
-    let phone = "";
-    phoneEls.forEach(el => {
-      const text = el.getAttribute("aria-label") || el.textContent || el.getAttribute("data-tooltip") || "";
-      const match = text.match(/[\+]?[\d\s\-()]{8,}/);
-      if (match && !phone) phone = match[0].trim();
-    });
-    // Also check for tel: links
-    if (!phone) {
-      const telLink = panel.querySelector('a[href^="tel:"]');
-      if (telLink) phone = telLink.href.replace("tel:", "");
-    }
-
-    // Extract website
-    let website = "";
-    websiteEls.forEach(el => {
-      const href = el.getAttribute("href") || "";
-      if (href && !href.includes("google.com") && !website) website = href;
-    });
-
-    // Extract address
-    let address = "";
-    addressEls.forEach(el => {
-      const text = el.getAttribute("aria-label") || el.textContent || "";
-      if (text.length > 5 && !address) address = text.replace(/^Address:\s*/i, "").trim();
-    });
-
-    const name = nameEl ? nameEl.textContent.trim() : "";
-    if (name) {
-      leads.push({
-        name,
-        phone,
-        website,
-        email: "", // Google Maps rarely shows email
-        address,
-        rating: ratingEl ? ratingEl.textContent.trim() : "",
-        reviews: reviewEl ? reviewEl.textContent.replace(/[^0-9]/g, "") : "",
-        category: categoryEl ? categoryEl.textContent.trim() : "",
-        collectedAt: new Date().toISOString()
-      });
-    }
+  if (state.logs && state.logs.length) {
+    $("logBox").textContent = state.logs.slice(-12).join("\n");
+    $("logBox").scrollTop = $("logBox").scrollHeight;
   }
 
-  // Strategy 2: Multiple results in the left panel (list view)
-  const feedItems = document.querySelectorAll('div[role="feed"] > div, .Nv2PK, a[href*="/maps/place/"]');
-  const seen = new Set();
-
-  feedItems.forEach(item => {
-    try {
-      // Get the link to the place
-      const link = item.querySelector('a[href*="/maps/place/"]') || (item.tagName === "A" ? item : null);
-      if (!link) return;
-
-      const nameEl = item.querySelector('.qBF1Pd, .fontHeadlineSmall, [role="heading"]') ||
-                     item.querySelector('span.fontHeadlineSmall') ||
-                     link.getAttribute("aria-label");
-
-      const name = typeof nameEl === "string" ? nameEl :
-                   (nameEl ? nameEl.textContent.trim() : "");
-      if (!name || seen.has(name)) return;
-      seen.add(name);
-
-      // Rating
-      const ratingEl = item.querySelector('.MW4etd, span[role="img"]');
-      const rating = ratingEl ? ratingEl.textContent.trim() : "";
-
-      // Review count
-      const reviewEl = item.querySelector('.UY7F9, span[aria-label*="review"]');
-      const reviews = reviewEl ? reviewEl.textContent.replace(/[^0-9]/g, "") : "";
-
-      // Category / type
-      const catEl = item.querySelector('.W4Efsd:nth-child(2), .r6bRMd, .rllt__details .rllt__wrapped');
-      const category = catEl ? catEl.textContent.trim().split("·")[0].trim() : "";
-
-      // Address (often in second line)
-      const addrParts = item.querySelectorAll('.W4Efsd');
-      let address = "";
-      addrParts.forEach(p => {
-        const t = p.textContent.trim();
-        if (t.length > 10 && !t.includes("star") && !address) address = t;
-      });
-
-      // Phone - Google Maps list sometimes shows it
-      let phone = "";
-      const allText = item.textContent || "";
-      const phoneMatch = allText.match(/(\+?\d{1,3}[\s\-]?\d{3,5}[\s\-]?\d{3,8})/);
-      if (phoneMatch) phone = phoneMatch[1].trim();
-
-      // Website
-      let website = "";
-      const webLink = item.querySelector('a[href]:not([href*="google.com"]):not([href*="maps"])');
-      if (webLink) website = webLink.href;
-
-      leads.push({
-        name, phone, website, email: "", address, rating, reviews, category,
-        collectedAt: new Date().toISOString()
-      });
-    } catch (_) {}
-  });
-
-  return leads;
+  // Toggle button states
+  const running = state.status === "running";
+  const paused = state.status === "paused";
+  $("startBtn").disabled = running || paused;
+  $("startBtn").textContent = running ? "Collecting..." : (paused ? "Paused" : "Start Profile Collection");
+  $("pauseBtn").disabled = !running;
+  $("resumeBtn").disabled = !paused;
+  $("stopBtn").disabled = state.status === "idle" || state.status === "stopped";
 }
+
+async function refreshState() {
+  const { state } = await chrome.storage.local.get(["state"]);
+  renderState(state || { status: "idle", collected: 0, target: 0, queue: 0, logs: [] });
+  refreshLeadCount();
+}
+
+async function refreshLeadCount() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  // (lead count shown in stats already; nothing extra)
+}
+
+// React to live updates from content/background scripts
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.state) renderState(changes.state.newValue);
+});
+
+// ---------- Tab helpers ----------
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
+function isMapsUrl(url) {
+  return /^https?:\/\/www\.google\.[a-z.]+\/maps/i.test(url || "");
+}
+
+async function ensureMapsTab() {
+  const tab = await getActiveTab();
+  if (tab && isMapsUrl(tab.url)) return tab;
+  // Open Google Maps in current tab
+  const newTab = await chrome.tabs.update(tab.id, { url: "https://www.google.com/maps" });
+  // Wait for it to load
+  await new Promise(r => setTimeout(r, 2500));
+  return newTab;
+}
+
+async function sendToContent(tabId, msg) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, msg);
+  } catch (e) {
+    // Inject content.js if missing
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content.js"]
+      });
+      await new Promise(r => setTimeout(r, 400));
+      return await chrome.tabs.sendMessage(tabId, msg);
+    } catch (e2) {
+      console.warn("sendToContent failed:", e2);
+      return null;
+    }
+  }
+}
+
+// ---------- Buttons: Campaign actions ----------
+$("startBtn").addEventListener("click", async () => {
+  await saveSettings();
+  const tab = await ensureMapsTab();
+  if (!tab) return;
+
+  const config = {
+    keywords: $("keywords").value.split("\n").map(s => s.trim()).filter(Boolean),
+    locations: $("locations").value.split("\n").map(s => s.trim()).filter(Boolean),
+    targetLeads: Number($("targetLeads").value) || 100,
+    maxPerSearch: Number($("maxPerSearch").value) || 50,
+    profileWaitSec: Number($("profileWait").value) || 5,
+    scrollLimit: Number($("scrollLimit").value) || 25
+  };
+
+  if (!config.keywords.length || !config.locations.length) {
+    alert("Please enter at least one keyword and one location.");
+    return;
+  }
+
+  await sendToContent(tab.id, { type: "START", config });
+  refreshState();
+});
+
+$("pauseBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (tab) await sendToContent(tab.id, { type: "PAUSE" });
+});
+
+$("resumeBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (tab) await sendToContent(tab.id, { type: "RESUME" });
+});
+
+$("stopBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (tab) await sendToContent(tab.id, { type: "STOP" });
+});
+
+$("clearBtn").addEventListener("click", async () => {
+  if (!confirm("Clear all leads and reset session?")) return;
+  await chrome.storage.local.set({
+    leads: [],
+    state: { status: "idle", collected: 0, target: 0, queue: 0, phoneCount: 0, addressCount: 0, logs: ["Session cleared."] }
+  });
+  refreshState();
+});
+
+// ---------- Paste helpers ----------
+$("pasteKeywords").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) { $("keywords").value = text.trim(); saveSettings(); }
+  } catch (_) { alert("Could not read clipboard"); }
+});
+$("pasteLocations").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) { $("locations").value = text.trim(); saveSettings(); }
+  } catch (_) { alert("Could not read clipboard"); }
+});
+
+$("doneBtn").addEventListener("click", () => window.close());
+
+// ---------- Export ----------
+function applyFilters(leads) {
+  let out = leads.slice();
+  if ($("filterPhone").checked) out = out.filter(l => l.phone);
+  if ($("filterAddress").checked) out = out.filter(l => l.address);
+  if ($("filterWebsite").checked) out = out.filter(l => l.website);
+  return out;
+}
+
+const EXPORT_HEADERS = ["name", "phone", "website", "address", "rating", "reviews",
+                        "category", "plusCode", "hours", "googleMapsUrl",
+                        "keyword", "location", "collectedAt"];
+
+function leadsToCsv(leads, sep = ",") {
+  const esc = (v) => {
+    if (v == null) return "";
+    const s = String(v).replace(/"/g, '""');
+    return `"${s}"`;
+  };
+  const lines = [EXPORT_HEADERS.map(esc).join(sep)];
+  for (const l of leads) {
+    lines.push(EXPORT_HEADERS.map(h => esc(l[h])).join(sep));
+  }
+  return lines.join("\n");
+}
+
+function downloadFile(text, filename, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 200);
+}
+
+$("exportCsv").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const filtered = applyFilters(leads);
+  if (!filtered.length) { alert("No leads match your filters."); return; }
+  const stamp = new Date().toISOString().slice(0, 10);
+  downloadFile(leadsToCsv(filtered, ","), `mapleads-${stamp}.csv`, "text/csv");
+});
+
+$("exportTsv").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const filtered = applyFilters(leads);
+  if (!filtered.length) { alert("No leads match your filters."); return; }
+  const stamp = new Date().toISOString().slice(0, 10);
+  // TSV uses tabs and no quoting
+  const headers = EXPORT_HEADERS.join("\t");
+  const rows = filtered.map(l => EXPORT_HEADERS.map(h => String(l[h] ?? "").replace(/[\t\n\r]/g, " ")).join("\t"));
+  downloadFile(headers + "\n" + rows.join("\n"), `mapleads-${stamp}.tsv`, "text/tab-separated-values");
+});
+
+$("copySheets").addEventListener("click", async () => {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const filtered = applyFilters(leads);
+  if (!filtered.length) { alert("No leads match your filters."); return; }
+  const headers = EXPORT_HEADERS.join("\t");
+  const rows = filtered.map(l => EXPORT_HEADERS.map(h => String(l[h] ?? "").replace(/[\t\n\r]/g, " ")).join("\t"));
+  const tsv = headers + "\n" + rows.join("\n");
+  try {
+    await navigator.clipboard.writeText(tsv);
+    alert("Copied! Now paste (Ctrl+V) into Google Sheets.");
+  } catch (e) {
+    alert("Could not copy to clipboard.");
+  }
+});
+
+$("exportDebug").addEventListener("click", async () => {
+  const data = await chrome.storage.local.get(null);
+  downloadFile(JSON.stringify(data, null, 2), `mapleads-debug-${Date.now()}.json`, "application/json");
+});
+
+// ---------- Init ----------
+loadSettings();
+refreshState();
+// Poll occasionally in case storage events miss
+setInterval(refreshState, 2000);

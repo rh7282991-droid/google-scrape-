@@ -1,47 +1,124 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Google Lead Scraper</title>
-  <link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8" />
+  <title>Google Maps Lead Scraper</title>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <div class="container">
-    <img src="assets/logo.svg" alt="Logo" class="logo">
-    <h1>Google Lead Scraper</h1>
-    <p class="subtitle">Collect leads from Google Maps</p>
+  <!-- ===== Header ===== -->
+  <div class="header-card">
+    <div class="header-row">
+      <img src="assets/logo.svg" alt="Logo" class="logo" />
+      <div class="header-text">
+        <h1>MapLead</h1>
+        <p class="tagline">Profile-only deep lead collector • Free Lifetime</p>
+      </div>
+      <button id="doneBtn" class="btn-done">Done</button>
+    </div>
+  </div>
+
+  <!-- ===== Campaign Setup ===== -->
+  <div class="card">
+    <h2>Campaign Setup</h2>
+
+    <label>Business Keywords</label>
+    <textarea id="keywords" rows="2" placeholder="cafe&#10;restaurant"></textarea>
+    <button id="pasteKeywords" class="btn-blue full">Paste Keywords</button>
+
+    <label class="mt">Locations</label>
+    <textarea id="locations" rows="2" placeholder="dhaka&#10;chittagong"></textarea>
+    <button id="pasteLocations" class="btn-blue full">Paste Locations</button>
+
+    <div class="grid2 mt">
+      <div>
+        <label>Target Leads</label>
+        <input type="number" id="targetLeads" value="100" min="1" max="10000" />
+      </div>
+      <div>
+        <label>Max per Search</label>
+        <input type="number" id="maxPerSearch" value="50" min="1" max="500" />
+      </div>
+    </div>
+
+    <div class="grid2 mt">
+      <div>
+        <label>Profile Wait</label>
+        <select id="profileWait">
+          <option value="3">3 sec Fast</option>
+          <option value="5" selected>5 sec Normal</option>
+          <option value="7">7 sec Safer</option>
+          <option value="10">10 sec Safest</option>
+        </select>
+      </div>
+      <div>
+        <label>Search Scroll Limit</label>
+        <input type="number" id="scrollLimit" value="25" min="1" max="100" />
+      </div>
+    </div>
+
+    <button id="startBtn" class="btn-gradient full mt">Start Profile Collection</button>
+  </div>
+
+  <!-- ===== Progress ===== -->
+  <div class="card">
+    <div class="progress-head">
+      <h2>Progress</h2>
+      <span id="progressPct">0%</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
 
     <div class="stats">
-      <div class="stat"><span id="totalLeads">0</span><small>Leads</small></div>
-      <div class="stat"><span id="totalPhones">0</span><small>Phones</small></div>
-      <div class="stat"><span id="totalEmails">0</span><small>Emails</small></div>
+      <div class="stat">
+        <div class="stat-num" id="statCollected">0</div>
+        <div class="stat-label">Collected</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" id="statPhone">0</div>
+        <div class="stat-label">Phone</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" id="statAddress">0</div>
+        <div class="stat-label">Address</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num" id="statQueue">0</div>
+        <div class="stat-label">Queue</div>
+      </div>
     </div>
 
-    <div class="instructions">
-      <p><b>How to use:</b></p>
-      <ol>
-        <li>Open <a href="https://www.google.com/maps" target="_blank">Google Maps</a></li>
-        <li>Search: <i>"restaurants in dhaka"</i></li>
-        <li>Click <b>Collect Leads</b> below</li>
-        <li>Wait for collection to finish</li>
-        <li>Export as CSV</li>
-      </ol>
-    </div>
-
-    <button id="collectBtn" class="btn-primary">Collect Leads from This Page</button>
-
-    <div id="progress" class="progress" style="display:none;">
-      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-      <p id="progressText">Collecting...</p>
-    </div>
-
-    <div class="export-section">
-      <button id="exportCsv" class="btn-secondary">Export CSV</button>
-      <button id="exportJson" class="btn-secondary">Export JSON</button>
-    </div>
-
-    <button id="clearBtn" class="btn-danger">Clear All Data</button>
+    <pre id="logBox" class="log-box">Idle. Configure your campaign and press Start.</pre>
   </div>
+
+  <!-- ===== Controls ===== -->
+  <div class="card">
+    <h2>Controls</h2>
+    <div class="grid2">
+      <button id="pauseBtn" class="btn-dark">Pause</button>
+      <button id="resumeBtn" class="btn-dark">Resume</button>
+      <button id="stopBtn" class="btn-dark">Stop</button>
+      <button id="clearBtn" class="btn-red">Clear Session</button>
+    </div>
+  </div>
+
+  <!-- ===== Export ===== -->
+  <div class="card">
+    <h2>Export</h2>
+    <label class="check-row"><input type="checkbox" id="filterPhone" /> Only with phone</label>
+    <label class="check-row"><input type="checkbox" id="filterAddress" /> Only with address</label>
+    <label class="check-row"><input type="checkbox" id="filterWebsite" /> Only with website</label>
+
+    <button id="exportCsv" class="btn-gradient full mt">Download Excel CSV</button>
+    <button id="exportTsv" class="btn-gradient full">Download Google Sheets TSV</button>
+    <button id="copySheets" class="btn-dark full">Copy to Google Sheets</button>
+    <button id="exportDebug" class="btn-dark full">Download Debug CSV</button>
+  </div>
+
+  <!-- ===== Logs ===== -->
+  <details class="card collapsible">
+    <summary>Logs</summary>
+    <p class="muted">No CAPTCHA bypass. No login bypass. Public/visible profiles only. May need many keywords/locations and may take a long time.</p>
+  </details>
 
   <script src="popup.js"></script>
 </body>
