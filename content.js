@@ -185,6 +185,7 @@
   }
 
   // Extract data from sidebar card (NO click needed)
+  // FIXED: Properly separates rating/reviews/price from address/category
   function extractFromCard(card) {
     const out = { scrapedAt: new Date().toISOString() };
 
@@ -200,44 +201,105 @@
     }
     if (!out.title) return null;
 
-    // Rating
+    // Clean title — remove "· Visited..." or "· X mentions"
+    out.title = out.title.replace(/\s*·\s*(Visited|Mentioned|Featured).*$/i, "").trim();
+
+    // Rating — from dedicated element
     const rEl = card.querySelector('.MW4etd');
     if (rEl) {
       const r = parseFloat(rEl.textContent);
       if (r > 0 && r <= 5) out.rating = r;
     }
 
-    // Review count
+    // Review count — from dedicated element
     const revEl = card.querySelector('.UY7F9');
     if (revEl) {
-      const m = revEl.textContent.match(/(\d[\d,]*)/);
+      const text = revEl.textContent.replace(/[()]/g, "");
+      const m = text.match(/(\d[\d,]*)/);
       if (m) out.reviewCount = parseInt(m[1].replace(/,/g, ""), 10);
     }
 
-    // Category + Address + Phone from .W4Efsd divs
-    const infoDivs = card.querySelectorAll('.W4Efsd');
-    if (infoDivs.length > 0) {
-      const text1 = infoDivs[0]?.innerText || "";
-      const parts1 = text1.split("·").map(s => s.trim()).filter(Boolean);
-      for (const p of parts1) {
-        if (!out.category && p.length < 40 && !/\d{3,}/.test(p)) {
-          out.category = p;
-        } else if (!out.address && p.length > 5 && (/\d/.test(p) || p.includes(","))) {
-          out.address = p;
+    // === SMART PARSING of card text ===
+    // Google Maps card has multiple info rows. We need to correctly identify:
+    // - Category (short text, no digits, like "Cafe", "Restaurant")
+    // - Address (has road/house numbers, comma-separated)
+    // - Price (starts with currency symbol: $, ৳, €, £, ₹)
+    // - Phone (digit pattern 8-15 digits)
+    // - Hours (Open/Closed/Opens/Closes)
+    // - Rating text like "4.3(1,696)" — MUST SKIP this
+
+    const allText = card.innerText || "";
+    const lines = allText.split("\n").map(s => s.trim()).filter(s => s && s !== "·");
+
+    // Skip patterns — these are NOT address/category
+    const SKIP_PATTERNS = [
+      /^\d+\.\d+\(\d/, // "4.3(1,696)" — rating(reviews) 
+      /^\d+\.\d+$/, // "4.3" — just rating
+      /^\(\d/, // "(1,696)" — just reviews
+      /^[\$€£₹৳¥₩]\d/, // "$10" "৳600" — price
+      /^[\$€£₹৳¥₩]\s?\d/, // "$ 10"
+      /^\d[\d,]*\s*reviews?$/i, // "1,696 reviews"
+      /^Visited/i, // "Visited last week"
+      /^Mentioned/i, // "Mentioned in..."
+      /^Open\b|^Closed\b|^Opens\b|^Closes\b/i, // Hours
+      /^\d+\s*(min|km|mi|m)\b/i, // Distance "5 min", "2.3 km"
+    ];
+
+    // Price range pattern (like ৳600-800, $10-20, $$)
+    const PRICE_RE = /^[\$€£₹৳¥₩]+[\d\s\-–,]*$|^\$+$/;
+
+    for (const line of lines) {
+      // Skip the title itself
+      if (line === out.title) continue;
+      // Skip any pattern we know is not useful for category/address
+      if (SKIP_PATTERNS.some(re => re.test(line))) continue;
+      // Skip price ranges
+      if (PRICE_RE.test(line)) continue;
+      // Skip very short items (1-2 chars like "·")
+      if (line.length < 3) continue;
+
+      // === Identify PHONE ===
+      if (!out.phone) {
+        const phoneMatch = line.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+        if (phoneMatch) {
+          const digits = phoneMatch[1].replace(/\D/g, "");
+          if (digits.length >= 8 && digits.length <= 15) {
+            out.phone = phoneMatch[1].trim();
+            continue;
+          }
         }
       }
-    }
-    if (infoDivs.length > 1) {
-      const text2 = infoDivs[1]?.innerText || "";
-      // Phone
-      const phoneMatch = text2.match(/(\+?\d[\d\s\-().]{7,}\d)/);
-      if (phoneMatch) {
-        const digits = phoneMatch[1].replace(/\D/g, "");
-        if (digits.length >= 8 && digits.length <= 15) out.phone = phoneMatch[1].trim();
+
+      // === Identify HOURS ===
+      if (!out.hours && /^(Open|Closed|Opens|Closes)/i.test(line)) {
+        out.hours = line;
+        continue;
       }
-      // Hours
-      const hoursMatch = text2.match(/(Open|Closed|Opens|Closes)[^·]*/i);
-      if (hoursMatch) out.hours = hoursMatch[0].trim();
+
+      // === Identify CATEGORY ===
+      // Category: short (< 35 chars), no digits (or very few), no commas usually
+      if (!out.category && line.length < 35 && !/\d{2,}/.test(line) && !line.includes(",")) {
+        // Extra check: not a distance or price
+        if (!/^\d/.test(line) && !/[₹$€£৳]/.test(line)) {
+          out.category = line;
+          continue;
+        }
+      }
+
+      // === Identify ADDRESS ===
+      // Address: longer text, has numbers or comma, looks like street/area
+      if (!out.address && line.length > 5 && line.length < 200) {
+        // Must contain a digit OR comma OR known address keywords
+        if (/\d/.test(line) || line.includes(",") ||
+            /\b(road|rd|street|st|house|floor|block|sector|lane|plot|area|no\.?)\b/i.test(line)) {
+          // Make sure it's not a phone (too many consecutive digits)
+          const digitOnly = line.replace(/\D/g, "");
+          if (digitOnly.length < 11) { // Phone numbers are 8-15 digits
+            out.address = line;
+            continue;
+          }
+        }
+      }
     }
 
     // Coordinates from URL
@@ -262,8 +324,8 @@
     for (let i = 0; i < results.length && !SHOULD_STOP; i++) {
       const { card, data } = results[i];
 
-      // Skip if already has phone AND website (no need to click)
-      if (data.phone && data.website) continue;
+      // Skip if already has phone AND website AND address (fully enriched)
+      if (data.phone && data.website && data.address) continue;
 
       // CAPTCHA check every 8 profiles
       if (enriched > 0 && enriched % 8 === 0) {
@@ -329,7 +391,7 @@
       const id = el.getAttribute("data-item-id") || "";
       const aria = el.getAttribute("aria-label") || "";
 
-      // Phone: data-item-id="phone:tel:+8801XXX"
+      // Phone: data-item-id="phone:tel:+8801XXX" — FULL number with country code
       if (id.startsWith("phone:tel:")) {
         out.phone = id.replace("phone:tel:", "").trim();
       }
@@ -354,10 +416,20 @@
       }
     });
 
-    // Fallback phone from tel: link
+    // Fallback phone from tel: link (includes country code)
     if (!out.phone) {
       const tel = document.querySelector('a[href^="tel:"]');
       if (tel) out.phone = tel.href.replace("tel:", "").trim();
+    }
+
+    // Fallback: aria-label on phone button often has full number
+    if (!out.phone) {
+      const phoneBtn = document.querySelector('[data-item-id*="phone"], [aria-label*="Phone" i]');
+      if (phoneBtn) {
+        const label = phoneBtn.getAttribute("aria-label") || "";
+        const m = label.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+        if (m) out.phone = m[1].trim();
+      }
     }
 
     // Fallback website
