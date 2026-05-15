@@ -66,6 +66,48 @@ function extractContactsFromHtml(html) {
   return { emails, phones };
 }
 
+function extractSocialMedia(html) {
+  const socials = {};
+  // Clean HTML for URL extraction
+  const text = html.replace(/\n/g, " ");
+
+  // Facebook
+  const fb = text.match(/https?:\/\/(www\.)?(facebook\.com|fb\.com)\/[a-zA-Z0-9._\-/]+/i);
+  if (fb && !fb[0].includes("/sharer") && !fb[0].includes("/share.php")) {
+    socials.facebook = fb[0].split("?")[0].replace(/\/+$/, "");
+  }
+
+  // Instagram
+  const ig = text.match(/https?:\/\/(www\.)?instagram\.com\/[a-zA-Z0-9._]+/i);
+  if (ig) socials.instagram = ig[0].split("?")[0].replace(/\/+$/, "");
+
+  // Twitter / X
+  const tw = text.match(/https?:\/\/(www\.)?(twitter\.com|x\.com)\/[a-zA-Z0-9_]+/i);
+  if (tw && !tw[0].includes("/intent") && !tw[0].includes("/share")) {
+    socials.twitter = tw[0].split("?")[0].replace(/\/+$/, "");
+  }
+
+  // LinkedIn
+  const li = text.match(/https?:\/\/(www\.)?linkedin\.com\/(company|in)\/[a-zA-Z0-9._\-]+/i);
+  if (li) socials.linkedin = li[0].split("?")[0].replace(/\/+$/, "");
+
+  // YouTube
+  const yt = text.match(/https?:\/\/(www\.)?(youtube\.com\/(channel|c|@|user)\/[a-zA-Z0-9._\-]+|youtube\.com\/[a-zA-Z0-9._\-]+)/i);
+  if (yt && !yt[0].includes("/watch") && !yt[0].includes("/embed")) {
+    socials.youtube = yt[0].split("?")[0].replace(/\/+$/, "");
+  }
+
+  // WhatsApp
+  const wa = text.match(/https?:\/\/(wa\.me|api\.whatsapp\.com\/send)[/?][^\s"'<>]+/i);
+  if (wa) socials.whatsapp = wa[0].split("&")[0];
+
+  // TikTok
+  const tt = text.match(/https?:\/\/(www\.)?tiktok\.com\/@[a-zA-Z0-9._]+/i);
+  if (tt) socials.tiktok = tt[0].split("?")[0].replace(/\/+$/, "");
+
+  return socials;
+}
+
 async function fetchPage(url) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 12000);
@@ -122,16 +164,25 @@ async function deepScrapeAll() {
       const html = await fetchPage(lead.website);
       if (!html) return;
       const { emails, phones } = extractContactsFromHtml(html);
+      const socials = extractSocialMedia(html);
 
       if (emails.length && !lead.email) lead.email = emails[0];
       lead.allEmails = emails;
       if (phones.length && !lead.phone) lead.phone = phones[0];
       lead.allPhones = phones;
+      // Social media
+      if (socials.facebook) lead.facebook = socials.facebook;
+      if (socials.instagram) lead.instagram = socials.instagram;
+      if (socials.twitter) lead.twitter = socials.twitter;
+      if (socials.linkedin) lead.linkedin = socials.linkedin;
+      if (socials.youtube) lead.youtube = socials.youtube;
+      if (socials.whatsapp) lead.whatsapp = socials.whatsapp;
+      if (socials.tiktok) lead.tiktok = socials.tiktok;
       lead.deepScrapedAt = new Date().toISOString();
 
-      if (emails.length || phones.length) {
+      if (emails.length || phones.length || Object.keys(socials).length) {
         updated++;
-        totalContacts += emails.length + phones.length;
+        totalContacts += emails.length + phones.length + Object.keys(socials).length;
       }
       await setProgress({ totalFound: totalContacts });
     }));
