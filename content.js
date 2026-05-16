@@ -181,51 +181,83 @@
   // OPEN PLACE
   // ============================================================
   async function openPlace(place, maxWaitMs) {
-    const beforeH1 = (document.querySelector('h1.DUwDvf') ||
-                      document.querySelector('div[role="main"] h1') || {}).textContent?.trim() || "";
-
+    // Find the anchor — first try by href, then by scrolling
     let anchor = null;
-    const all = document.querySelectorAll('a[href*="/maps/place/"]');
-    for (const a of all) {
-      if (a.href === place.href) { anchor = a; break; }
-    }
-    if (!anchor) {
+    const findAnchor = () => {
+      const all = document.querySelectorAll('a[href*="/maps/place/"]');
       for (const a of all) {
-        if ((a.getAttribute("aria-label") || "").trim() === place.name) { anchor = a; break; }
+        if (a.href === place.href) return a;
+      }
+      for (const a of all) {
+        if ((a.getAttribute("aria-label") || "").trim() === place.name) return a;
+      }
+      return null;
+    };
+
+    anchor = findAnchor();
+
+    // If anchor not in DOM, it's virtualized — scroll feed to find it
+    if (!anchor) {
+      const feed = findFeed();
+      if (feed) {
+        log("Scrolling feed to find card:", place.name);
+        // Scroll through the feed looking for our anchor
+        for (let attempt = 0; attempt < 20; attempt++) {
+          feed.scrollBy({ top: 300, behavior: "smooth" });
+          await sleep(300);
+          anchor = findAnchor();
+          if (anchor) break;
+        }
+        // If still not found, scroll back to top and try again
+        if (!anchor) {
+          feed.scrollTo({ top: 0, behavior: "smooth" });
+          await sleep(500);
+          for (let attempt = 0; attempt < 30; attempt++) {
+            feed.scrollBy({ top: 400, behavior: "smooth" });
+            await sleep(300);
+            anchor = findAnchor();
+            if (anchor) break;
+          }
+        }
       }
     }
+
     if (!anchor) { warn("Anchor not found:", place.name); return false; }
 
     try { anchor.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
-    await sleep(500);
+    await sleep(400);
 
+    // Click with both methods
     try { anchor.click(); } catch (_) {}
     realClick(anchor);
 
+    // Wait for the DETAIL PANEL to appear
+    // Key insight: when a place is open, there's a specific container
+    // with data-item-id buttons AND an h1. We wait for THAT.
     const deadline = Date.now() + maxWaitMs;
-    let acceptedTitle = "";
+    let ready = false;
     while (Date.now() < deadline && !SHOULD_STOP) {
       await sleep(400);
-      const h1 = document.querySelector('h1.DUwDvf') ||
-                 document.querySelector('div[role="main"] h1');
-      const title = (h1?.textContent || "").trim();
-      if (title && title !== beforeH1 && title.length > 1) {
-        acceptedTitle = title;
-        break;
+      // The detail panel is ready when we can see data-item-id buttons
+      // AND an h1.DUwDvf with real content (not "Results")
+      const h1 = document.querySelector('h1.DUwDvf');
+      const hasButtons = document.querySelector('[data-item-id^="phone"], [data-item-id="address"], [data-item-id="authority"]');
+      if (h1 && h1.textContent.trim().length > 1 && hasButtons) {
+        const title = h1.textContent.trim();
+        // Reject if it's just the search results heading
+        if (title.toLowerCase() !== "results" &&
+            !title.toLowerCase().startsWith("results for")) {
+          ready = true;
+          log("Opened:", title);
+          break;
+        }
       }
     }
 
-    if (!acceptedTitle) { warn("Panel never opened for:", place.name); return false; }
+    if (!ready) { warn("Panel never opened for:", place.name); return false; }
 
-    log("Opened:", acceptedTitle);
-    await sleep(jitter(2000));
-
-    const t0 = Date.now();
-    while (Date.now() - t0 < 4000) {
-      if (document.querySelector('[data-item-id]')) break;
-      await sleep(300);
-    }
-
+    // Extra settle time for all buttons to render
+    await sleep(jitter(1500));
     return true;
   }
 
@@ -236,10 +268,20 @@
   function txt(el) { if (!el) return ""; return (el.textContent || "").replace(/\s+/g, " ").trim(); }
 
   function extractTitle(root) {
-    return txt(root.querySelector('h1.DUwDvf')) ||
-           txt(root.querySelector('h1.fontHeadlineLarge')) ||
-           txt(root.querySelector('div[role="main"] h1')) ||
-           txt(root.querySelector('h1'));
+    const candidates = [
+      txt(root.querySelector('h1.DUwDvf')),
+      txt(root.querySelector('h1.fontHeadlineLarge')),
+      txt(root.querySelector('div[role="main"] h1')),
+      txt(root.querySelector('h1'))
+    ];
+    for (const title of candidates) {
+      if (!title) continue;
+      // Reject search-results headings
+      if (/^results?\b/i.test(title)) continue;
+      if (/^search results/i.test(title)) continue;
+      return title;
+    }
+    return "";
   }
 
   function extractPhone(root) {
@@ -474,6 +516,12 @@
   // Save
   // ============================================================
   async function saveLead(data) {
+    // Never save leads with empty or generic titles
+    if (!data.title || /^results?\b/i.test(data.title)) {
+      warn("Refusing to save bad title:", data.title);
+      return false;
+    }
+
     const { leads = [] } = await chrome.storage.local.get(["leads"]);
     const dup = leads.some(l =>
       (l.url && l.url === data.url) ||
@@ -494,21 +542,32 @@
   }
 
   // ============================================================
-  // Back to list
+  // Back to list — click Maps panel back button (NOT history.back)
+  // history.back() breaks feed virtualization!
   // ============================================================
   async function backToList() {
-    const back = document.querySelector('button[jsaction*="pane.back"]') ||
-                 document.querySelector('button[aria-label="Back"]') ||
-                 document.querySelector('button[aria-label*="Back" i][jsaction]');
-    if (back) {
-      log("Click back");
-      try { back.click(); } catch (_) {}
-      realClick(back);
-      await sleep(1200);
-      return;
+    // Strategy 1: Maps' own back button (keeps feed intact!)
+    const backSelectors = [
+      'button[jsaction*="pane.back"]',
+      'button[aria-label="Back"]',
+      'button[aria-label*="Back" i]',
+      'button.hYkMDe',  // Known Maps back-button class
+      '.section-back-to-list-button'
+    ];
+    for (const sel of backSelectors) {
+      const btn = document.querySelector(sel);
+      if (btn && btn.offsetParent !== null) { // visible
+        log("Click back:", sel);
+        try { btn.click(); } catch (_) {}
+        realClick(btn);
+        await sleep(1500);
+        return;
+      }
     }
-    log("history.back()");
-    history.back();
+
+    // Strategy 2: If no back button visible, press Escape key
+    log("No back btn, pressing Escape");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
     await sleep(1500);
   }
 
