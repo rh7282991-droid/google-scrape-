@@ -568,11 +568,13 @@
 
     const settings = await chrome.storage.local.get([
       "targetLeads", "searchScroll", "profileWait",
-      "deepEnrich", "fields", "savedKeywords", "savedLocations"
+      "fields", "savedKeywords", "savedLocations"
     ]);
     const target = settings.targetLeads || 100;
     const profileWaitMs = (settings.profileWait || 7) * 1000;
-    const wantEnrich = settings.deepEnrich !== false;
+    const fields = settings.fields || {};
+    // Auto-enrich from website if ANY social/email field is checked
+    const wantEnrich = !!(fields.email || fields.facebook || fields.instagram || fields.twitter || fields.youtube || fields.linkedin);
 
     showToast("Starting Maps scrape...", "#2563eb");
 
@@ -653,8 +655,27 @@
           lead = await enrichFromWebsite(lead);
         }
 
+        // Filter: only keep fields that user has checked
+        const filteredLead = { scrapedAt: lead.scrapedAt, url: lead.url };
+        if (fields.title !== false) filteredLead.title = lead.title;
+        if (fields.phone) filteredLead.phone = lead.phone;
+        if (fields.email) filteredLead.email = lead.email;
+        if (fields.website) filteredLead.website = lead.website;
+        if (fields.address) filteredLead.address = lead.address;
+        if (fields.category) filteredLead.category = lead.category;
+        if (fields.rating) filteredLead.rating = lead.rating;
+        if (fields.reviewCount) filteredLead.reviewCount = lead.reviewCount;
+        if (fields.facebook) filteredLead.facebook = lead.facebook;
+        if (fields.instagram) filteredLead.instagram = lead.instagram;
+        if (fields.twitter) filteredLead.twitter = lead.twitter;
+        if (fields.youtube) filteredLead.youtube = lead.youtube;
+        if (fields.linkedin) filteredLead.linkedin = lead.linkedin;
+        if (fields.hours) filteredLead.hours = lead.hours;
+        if (fields.domain) filteredLead.domain = lead.domain;
+        if (fields.latitude) { filteredLead.latitude = lead.latitude; filteredLead.longitude = lead.longitude; }
+
         // Save
-        const added = await saveLead(lead);
+        const added = await saveLead(filteredLead);
         if (added) saved++;
 
         log(`[${i + 1}/${limit}] ${lead.title} | ${lead.phone} | ${lead.address}`);

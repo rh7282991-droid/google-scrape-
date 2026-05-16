@@ -70,13 +70,12 @@ async function getActiveTab() {
 // ===== Settings =====
 async function loadSettings() {
   const s = await chrome.storage.local.get([
-    "autoScrape", "deepEnrich", "autoMaxPages", "fields",
+    "autoScrape", "autoMaxPages", "fields",
     "profileWait", "targetLeads", "searchScroll",
     "randomDelay", "captchaDetect", "autoResume",
     "savedKeywords", "savedLocations"
   ]);
   $("autoScrape").checked = !!s.autoScrape;
-  $("deepEnrich").checked = s.deepEnrich !== false;
   $("autoMaxPages").value = s.autoMaxPages || 50;
   $("profileWait").value = s.profileWait || 7;
   $("targetLeads").value = s.targetLeads || 100;
@@ -452,7 +451,6 @@ $("scrapeNow").addEventListener("click", async () => {
 
 // ===== Settings listeners =====
 $("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
-$("deepEnrich").addEventListener("change", (e) => saveSetting("deepEnrich", e.target.checked));
 $("autoMaxPages").addEventListener("change", (e) => saveSetting("autoMaxPages", Number(e.target.value) || 50));
 $("profileWait").addEventListener("change", (e) => saveSetting("profileWait", Number(e.target.value)));
 $("targetLeads").addEventListener("change", (e) => saveSetting("targetLeads", Number(e.target.value) || 100));
