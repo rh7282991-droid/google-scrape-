@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Maps Lead Scraper Pro",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Advanced Google Maps lead scraper. Extract business name, phone, address, website, email, social links from Google Maps profiles. CAPTCHA-safe with multi-account rotation.",
   "permissions": [
     "storage",
@@ -41,9 +41,16 @@
     {
       "matches": [
         "https://www.google.com/maps/*",
+        "https://www.google.co.*/maps/*",
+        "https://www.google.com.*/maps/*",
         "https://maps.google.com/*",
+        "https://maps.google.co.*/*",
+        "https://maps.google.com.*/*",
         "https://www.google.com/search*",
-        "https://www.google.com/sorry/*"
+        "https://www.google.co.*/search*",
+        "https://www.google.com.*/search*",
+        "https://www.google.com/sorry/*",
+        "https://www.google.co.*/sorry/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
