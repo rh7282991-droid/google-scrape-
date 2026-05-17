@@ -471,3 +471,69 @@ chrome.runtime.onInstalled.addListener(async () => {
   chrome.alarms.create("captcha-cooldown-check", { periodInMinutes: 1 });
   chrome.alarms.create("midnight-reset", { periodInMinutes: 60 });
 });
+
+
+
+// ============================================
+// AUTO-WEBHOOK — sends new leads automatically
+// Runs in service worker (background) so works
+// even when popup is closed or browser tab changes.
+// ============================================
+
+let _lastLeadCount = 0;
+let _webhookSending = false;
+
+// Watch for storage changes — when leads array grows, auto-send new ones
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local") return;
+  if (!changes.leads) return;
+
+  const { autoWebhook, webhookUrl } = await chrome.storage.local.get(["autoWebhook", "webhookUrl"]);
+  if (!autoWebhook || !webhookUrl) return;
+
+  const newLeads = changes.leads.newValue || [];
+  const oldLeads = changes.leads.oldValue || [];
+
+  // Only send the NEW leads (diff)
+  if (newLeads.length <= oldLeads.length) return;
+  const freshLeads = newLeads.slice(oldLeads.length);
+
+  if (!freshLeads.length || _webhookSending) return;
+  _webhookSending = true;
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(freshLeads)
+    });
+    if (res.ok) {
+      console.log(`[MLS-BG] Auto-webhook: sent ${freshLeads.length} new leads (total: ${newLeads.length})`);
+      // Track how many we've sent
+      const { webhookSentCount = 0 } = await chrome.storage.local.get(["webhookSentCount"]);
+      await chrome.storage.local.set({ webhookSentCount: webhookSentCount + freshLeads.length });
+    } else {
+      console.warn(`[MLS-BG] Auto-webhook error: ${res.status}`);
+    }
+  } catch (e) {
+    console.warn("[MLS-BG] Auto-webhook fetch failed:", e.message);
+  }
+  _webhookSending = false;
+});
+
+// Also watch for campaign end — stop auto-webhook when done
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local") return;
+  if (!changes.progress) return;
+
+  const p = changes.progress.newValue;
+  if (p && !p.isRunning) {
+    // Campaign ended
+    const { autoWebhook, webhookSentCount = 0 } = await chrome.storage.local.get(["autoWebhook", "webhookSentCount"]);
+    if (autoWebhook && webhookSentCount > 0) {
+      console.log(`[MLS-BG] Campaign done. Total ${webhookSentCount} leads sent to webhook.`);
+      // Optionally auto-disable (uncomment if you want one-shot behavior):
+      // await chrome.storage.local.set({ autoWebhook: false });
+    }
+  }
+});

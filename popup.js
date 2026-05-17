@@ -556,16 +556,25 @@ $("exportJson").addEventListener("click", async () => {
 });
 
 // ===== Webhook / n8n =====
-// Load saved webhook URL on startup
+// Load saved webhook URL + autoWebhook state on startup
 (async () => {
-  const { webhookUrl } = await chrome.storage.local.get(["webhookUrl"]);
+  const { webhookUrl, autoWebhook } = await chrome.storage.local.get(["webhookUrl", "autoWebhook"]);
   if (webhookUrl && $("webhookUrl")) $("webhookUrl").value = webhookUrl;
+  if ($("autoWebhook")) $("autoWebhook").checked = !!autoWebhook;
 })();
 
 // Save webhook URL whenever user types
 if ($("webhookUrl")) {
   $("webhookUrl").addEventListener("input", (e) => {
     chrome.storage.local.set({ webhookUrl: e.target.value.trim() });
+  });
+}
+
+// Auto-webhook toggle
+if ($("autoWebhook")) {
+  $("autoWebhook").addEventListener("change", (e) => {
+    chrome.storage.local.set({ autoWebhook: e.target.checked });
+    setStatus(e.target.checked ? "Auto-webhook ON. New leads will auto-send." : "Auto-webhook OFF.");
   });
 }
 

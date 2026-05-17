@@ -331,7 +331,11 @@
         <button id="sendWebhook" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#f97316,#ea580c);">
           Send to Webhook
         </button>
-        <small style="display:block;margin-top:4px;color:#94a3b8;font-size:10px;text-align:center;">Sends all leads as JSON array to your webhook endpoint</small>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
+          <input type="checkbox" id="autoWebhook" style="width:16px;height:16px;" />
+          <span style="font-size:12px;font-weight:600;color:#334155;">Auto-send new leads to webhook</span>
+        </label>
+        <small style="display:block;margin-top:4px;color:#94a3b8;font-size:10px;">ON = every new lead auto-sent in background (even if popup closed)</small>
       </div>
 
       <button id="clear" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#1e293b,#334155);margin-top:4px;">
