@@ -438,9 +438,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // INSTALL & ALARMS
 // ============================================
 chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "snapshots", "fields"]);
+  const cur = await chrome.storage.local.get(["leads", "snapshots", "fields", "passiveCapture"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
   if (!cur.snapshots) await chrome.storage.local.set({ snapshots: [] });
+
+  // Default: Passive capture ON for first-time install
+  if (cur.passiveCapture === undefined) {
+    await chrome.storage.local.set({ passiveCapture: true });
+  }
+
   if (!cur.fields) {
     await chrome.storage.local.set({
       fields: {

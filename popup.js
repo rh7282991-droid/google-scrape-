@@ -258,8 +258,10 @@ async function loadSettings() {
     "savedKeywords", "savedLocations", "fields"
   ]);
 
-  $("passiveCapture").checked = !!s.passiveCapture;
-  $("passiveStatus").style.display = s.passiveCapture ? "flex" : "none";
+  // Default ON if user hasn't explicitly turned off
+  const passiveOn = s.passiveCapture !== false;
+  $("passiveCapture").checked = passiveOn;
+  $("passiveStatus").style.display = passiveOn ? "flex" : "none";
   $("targetLeads").value = s.targetLeads || 100;
   $("captureWait").value = s.captureWait || 2;
   if (s.savedKeywords) $("searchInput").value = s.savedKeywords;

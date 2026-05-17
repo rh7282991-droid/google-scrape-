@@ -301,18 +301,21 @@
   }
 
   // ============================================
-  // PASSIVE CAPTURE MODE
-  // Auto-save HTML when user clicks a place
+  // PASSIVE CAPTURE MODE — SMART AUTO-SAVE
+  // Watches: URL changes (place clicks) + scroll (visible cards in list)
+  // Auto-saves in background while user browses normally
   // ============================================
   let lastPanelUrl = "";
   let passiveObserver = null;
+  let passiveCardObserver = null;
+  let passiveScrollListener = null;
 
   async function startPassiveCapture() {
     if (passiveObserver) return; // already active
 
-    showToast("Passive capture ON — browsing will auto-save places", "#22c55e");
+    showToast("Auto-Capture ON — places will auto-save as you browse", "#22c55e");
 
-    // Watch URL changes (place clicks change URL)
+    // ===== Watcher 1: Place click → URL changes =====
     passiveObserver = setInterval(async () => {
       const currentUrl = location.href;
       if (currentUrl === lastPanelUrl) return;
@@ -320,40 +323,82 @@
 
       lastPanelUrl = currentUrl;
 
-      // Wait a moment for panel to render
+      // Wait for panel to render
       await sleep(1500);
+      await capturePanel(currentUrl);
+    }, 1500);
 
-      const html = getDetailPanelHTML();
-      const name = getQuickName();
-      if (!name) return; // No panel loaded
+    // ===== Watcher 2: Hover/click cards in sidebar list =====
+    // When user hovers over a place card, it sometimes loads detail
+    document.addEventListener("click", async (e) => {
+      const link = e.target.closest('a[href*="/maps/place/"]');
+      if (link) {
+        // User clicked a place — wait then save
+        setTimeout(async () => {
+          const url = location.href;
+          if (url.includes("/maps/place/")) await capturePanel(url);
+        }, 2000);
+      }
+    }, true);
 
-      const { snapshots = [] } = await chrome.storage.local.get(["snapshots"]);
+    // ===== Watcher 3: Sidebar scroll → load more places =====
+    // When user scrolls the sidebar, new place links appear
+    let scrollDebounce = null;
+    passiveScrollListener = () => {
+      clearTimeout(scrollDebounce);
+      scrollDebounce = setTimeout(async () => {
+        const container = findResultsContainer();
+        if (!container) return;
+        // Just track that new cards loaded — don't auto-click them
+        const cards = container.querySelectorAll('a[href*="/maps/place/"]');
+        // Update progress for visual feedback only
+        const { snapshots = [] } = await chrome.storage.local.get(["snapshots"]);
+        await setProgress({
+          isRunning: false,
+          title: "Auto-Capture active",
+          currentItem: `${cards.length} places visible · ${snapshots.length} cached`
+        });
+      }, 800);
+    };
+    document.addEventListener("scroll", passiveScrollListener, { capture: true, passive: true });
+  }
 
-      // Check if already saved
-      if (snapshots.some(s => s.url === currentUrl)) return;
+  // Helper: Capture currently-visible panel
+  async function capturePanel(url) {
+    const html = getDetailPanelHTML();
+    const name = getQuickName();
+    if (!name) return; // No panel loaded
 
-      const snapshot = {
-        id: "snap_" + Date.now(),
-        url: currentUrl,
-        name: name,
-        html: html,
-        capturedAt: new Date().toISOString(),
-        extracted: false
-      };
+    const { snapshots = [] } = await chrome.storage.local.get(["snapshots"]);
 
-      snapshots.push(snapshot);
-      await chrome.storage.local.set({ snapshots });
+    // Check if already saved (dedup by URL)
+    if (snapshots.some(s => s.url === url)) return;
 
-      showToast(`Auto-saved: ${name.slice(0, 25)}`, "#2563eb");
-    }, 2000);
+    const snapshot = {
+      id: "snap_" + Date.now(),
+      url: url,
+      name: name,
+      html: html,
+      capturedAt: new Date().toISOString(),
+      extracted: false
+    };
+
+    snapshots.push(snapshot);
+    await chrome.storage.local.set({ snapshots });
+
+    showToast(`📌 Auto-saved: ${name.slice(0, 25)}`, "#2563eb");
   }
 
   function stopPassiveCapture() {
     if (passiveObserver) {
       clearInterval(passiveObserver);
       passiveObserver = null;
-      showToast("Passive capture OFF", "#64748b");
     }
+    if (passiveScrollListener) {
+      document.removeEventListener("scroll", passiveScrollListener, { capture: true });
+      passiveScrollListener = null;
+    }
+    showToast("Auto-Capture OFF", "#64748b");
   }
 
   // ============================================
@@ -389,7 +434,8 @@
   });
 
   // ============================================
-  // Auto-start passive if setting is ON
+  // Auto-start passive ALWAYS on Maps
+  // (Passive capture is now ON by default - no user action needed)
   // ============================================
   (async () => {
     if (!isMapsPage()) return;
@@ -397,8 +443,15 @@
     const cap = detectCaptcha();
     if (cap.detected) { await handleCaptcha(); return; }
 
-    const { passiveCapture } = await chrome.storage.local.get(["passiveCapture"]);
-    if (passiveCapture) {
+    // Set default ON if user hasn't explicitly turned it off
+    const stored = await chrome.storage.local.get(["passiveCapture"]);
+    if (stored.passiveCapture === undefined) {
+      // First time - default to ON
+      await chrome.storage.local.set({ passiveCapture: true });
+    }
+
+    // Always start passive unless user turned it off
+    if (stored.passiveCapture !== false) {
       await startPassiveCapture();
     }
   })();

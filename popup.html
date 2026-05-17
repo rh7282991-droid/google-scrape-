@@ -62,16 +62,16 @@
         </div>
       </div>
 
-      <!-- Passive Capture -->
+      <!-- Auto-Capture Toggle (ON by default) -->
       <div class="toggle-section">
         <label class="toggle-row">
           <span class="toggle-switch">
-            <input type="checkbox" id="passiveCapture" />
+            <input type="checkbox" id="passiveCapture" checked />
             <span class="toggle-slider"></span>
           </span>
           <span class="toggle-text">
-            <strong>Passive Capture</strong>
-            <small>Auto-save places while you browse Maps</small>
+            <strong>Auto-Capture (Recommended)</strong>
+            <small>Saves places automatically while you browse Maps — no clicks needed</small>
           </span>
         </label>
       </div>
@@ -118,8 +118,12 @@
       <div class="panel-title">Capture Places</div>
 
       <!-- Info box -->
+      <div class="info-box success">
+        <strong>✓ Auto-Capture is ON</strong>
+        Just browse Google Maps normally. Every place you click on will be auto-saved. No buttons needed!
+      </div>
       <div class="info-box">
-        <strong>How it works:</strong> Extension clicks through places FAST (2-3 sec each), saves only the HTML. No data extraction yet = very low detection risk.
+        <strong>Manual Capture (optional):</strong> Click the button below to bulk-capture places fast.
       </div>
 
       <!-- Snapshot Stats -->
@@ -161,18 +165,18 @@
         </div>
       </div>
 
-      <!-- Buttons -->
+      <!-- Main Action Button -->
       <button id="captureBtn" class="btn-block btn-primary btn-xl">
-        <span class="ic">&#9654;</span> Start Capture
+        <span class="ic">⚡</span> Bulk Capture (Fast)
       </button>
       <button id="stopCaptureBtn" class="btn-block btn-danger-ghost" style="display:none; margin-top:8px;">
         <span class="ic">&#9632;</span> Stop
       </button>
 
       <!-- Passive status -->
-      <div class="passive-status" id="passiveStatus" style="display:none;">
+      <div class="passive-status" id="passiveStatus">
         <span class="dot-green"></span>
-        <span>Passive capture active — browse Maps normally</span>
+        <span>Auto-Capture active — just browse Maps normally, places save automatically</span>
       </div>
 
       <!-- Recent captures -->
@@ -293,7 +297,7 @@
   <!-- ===== Status Bar ===== -->
   <footer class="status-bar">
     <span id="status">Ready.</span>
-    <span class="version">v5.0.0</span>
+    <span class="version">v5.1.0</span>
   </footer>
 
   <script src="popup.js"></script>
