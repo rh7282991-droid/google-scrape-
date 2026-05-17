@@ -12,11 +12,14 @@ function csvEscape(v) {
 function leadsToCsv(leads) {
   const keys = new Set();
   leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
-  // Maps-specific preferred order
+  // Maps + Social preferred order
   const preferred = [
     "title", "phone", "email", "website", "address", "category",
     "rating", "reviewCount", "hours", "domain",
-    "latitude", "longitude", "plusCode", "url", "scrapedAt"
+    "facebook", "instagram", "twitter", "linkedin", "youtube",
+    "tiktok", "whatsapp", "pinterest",
+    "latitude", "longitude", "plusCode", "url",
+    "allEmails", "allPhones", "scrapedAt"
   ];
   const headers = preferred.filter(k => keys.has(k))
     .concat([...keys].filter(k => !preferred.includes(k)));
@@ -37,9 +40,35 @@ function downloadText(text, filename, mime) {
   return chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
 }
 
-// ----- Deep enrichment (visit websites for emails) -----
+// ----- Deep enrichment (visit websites for emails + socials) -----
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
+
+const SOCIAL_PATTERNS = {
+  facebook:  /(?:https?:\/\/)?(?:www\.|m\.|web\.)?facebook\.com\/(?!sharer|share|tr|plugins|dialog|v\d)([A-Za-z0-9._\-]+(?:\/[A-Za-z0-9._\-]+)?)/i,
+  instagram: /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?!p\/|reel\/|stories\/|explore\/|accounts\/)([A-Za-z0-9._\-]+)/i,
+  twitter:   /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/(?!share|intent|home|search|i\/)([A-Za-z0-9_]{1,15})/i,
+  linkedin:  /(?:https?:\/\/)?(?:www\.|[a-z]{2}\.)?linkedin\.com\/(?:company|in|school|pub)\/([A-Za-z0-9._\-%]+)/i,
+  youtube:   /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/(?:c\/|channel\/|user\/|@)([A-Za-z0-9._\-]+)/i,
+  tiktok:    /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@([A-Za-z0-9._\-]+)/i,
+  whatsapp:  /(?:https?:\/\/)?(?:wa\.me\/[\d+]+|api\.whatsapp\.com\/send\?phone=[\d+]+|chat\.whatsapp\.com\/[A-Za-z0-9]+)/i,
+  pinterest: /(?:https?:\/\/)?(?:www\.)?pinterest\.[a-z.]+\/([A-Za-z0-9._\-]+)\/?/i
+};
+
+function extractSocialsFromHtml(html) {
+  const out = {};
+  for (const [platform, regex] of Object.entries(SOCIAL_PATTERNS)) {
+    const m = html.match(regex);
+    if (m) {
+      let url = m[0];
+      if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+      // Clean trailing punctuation/quotes
+      url = url.replace(/["'<>\s].*$/, "").replace(/[.,;)]+$/, "");
+      out[platform] = url;
+    }
+  }
+  return out;
+}
 
 function extractContactsFromHtml(html) {
   const text = html
@@ -52,8 +81,12 @@ function extractContactsFromHtml(html) {
 
   const emails = Array.from(new Set(
     [...mailtos, ...(text.match(EMAIL_RE) || [])]
-      .map(s => s.toLowerCase())
-      .filter(s => !/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(s))
+      .map(s => s.toLowerCase().trim())
+      .filter(s =>
+        !/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(s) &&
+        !/(sentry|wixpress|googleusercontent|cloudflare|noreply|no-reply|example|donotreply)/i.test(s) &&
+        s.length < 100
+      )
   ));
 
   const phonesRaw = [...tels, ...(text.match(PHONE_RE) || [])];
@@ -63,7 +96,11 @@ function extractContactsFromHtml(html) {
       return digits.length >= 8 && digits.length <= 15;
     })
   ));
-  return { emails, phones };
+
+  // Add social media
+  const socials = extractSocialsFromHtml(html);
+
+  return { emails, phones, allEmails: emails, ...socials };
 }
 
 async function fetchPage(url) {
@@ -108,6 +145,7 @@ async function deepScrapeAll() {
   let updated = 0;
   let processed = 0;
   let totalContacts = 0;
+  const SOCIAL_KEYS = ["facebook","instagram","twitter","linkedin","youtube","tiktok","whatsapp","pinterest"];
 
   const BATCH = 3;
   for (let i = 0; i < enrichable.length; i += BATCH) {
@@ -121,15 +159,22 @@ async function deepScrapeAll() {
 
       const html = await fetchPage(lead.website);
       if (!html) return;
-      const { emails, phones } = extractContactsFromHtml(html);
+      const contacts = extractContactsFromHtml(html);
+      const { emails, phones } = contacts;
 
       if (emails.length && !lead.email) lead.email = emails[0];
       lead.allEmails = emails;
       if (phones.length && !lead.phone) lead.phone = phones[0];
       lead.allPhones = phones;
+
+      // Merge socials
+      for (const k of SOCIAL_KEYS) {
+        if (contacts[k] && !lead[k]) lead[k] = contacts[k];
+      }
+
       lead.deepScrapedAt = new Date().toISOString();
 
-      if (emails.length || phones.length) {
+      if (emails.length || phones.length || SOCIAL_KEYS.some(k => contacts[k])) {
         updated++;
         totalContacts += emails.length + phones.length;
       }
@@ -148,6 +193,15 @@ async function deepScrapeAll() {
   }, 4000);
 
   return { ok: true, updated };
+}
+
+// Single-website enrichment (used inline during campaign)
+async function enrichSingleWebsite(url) {
+  if (!url) return { ok: false, error: "no-url" };
+  const html = await fetchPage(url);
+  if (!html) return { ok: false, error: "fetch-failed" };
+  const contacts = extractContactsFromHtml(html);
+  return { ok: true, contacts };
 }
 
 // ===== Google Autocomplete =====
@@ -270,6 +324,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "DEEP_SCRAPE_ALL") {
         sendResponse(await deepScrapeAll());
+      } else if (msg.type === "ENRICH_WEBSITE") {
+        sendResponse(await enrichSingleWebsite(msg.url));
       } else if (msg.type === "FETCH_SUGGESTIONS") {
         sendResponse({ suggestions: await fetchGoogleSuggestions(msg.query) });
       } else if (msg.type === "CAPTCHA_DETECTED") {

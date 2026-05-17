@@ -82,6 +82,16 @@
             <small>Auto-collect when browsing Maps</small>
           </span>
         </label>
+        <label class="toggle-row">
+          <span class="toggle-switch">
+            <input type="checkbox" id="autoEnrichWebsite" checked />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text">
+            <strong>Auto-Enrich Website</strong>
+            <small>Visit websites for emails + socials</small>
+          </span>
+        </label>
       </div>
 
       <!-- Fields to Extract -->
@@ -100,6 +110,12 @@
             <label class="field-chip"><input type="checkbox" id="f_category" checked /><span>Category</span></label>
             <label class="field-chip"><input type="checkbox" id="f_rating" checked /><span>Rating</span></label>
             <label class="field-chip"><input type="checkbox" id="f_reviewCount" checked /><span>Reviews</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_facebook" checked /><span>Facebook</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_instagram" checked /><span>Instagram</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_linkedin" checked /><span>LinkedIn</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_twitter" /><span>Twitter/X</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_youtube" /><span>YouTube</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_whatsapp" /><span>WhatsApp</span></label>
             <label class="field-chip"><input type="checkbox" id="f_hours" /><span>Hours</span></label>
             <label class="field-chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
             <label class="field-chip"><input type="checkbox" id="f_latitude" /><span>Coordinates</span></label>
@@ -176,7 +192,7 @@
         </div>
         <div class="preview-table-wrap" id="previewTableWrap">
           <table class="preview-table">
-            <thead><tr><th>#</th><th>Business</th><th>Phone</th><th>Address</th></tr></thead>
+            <thead><tr><th>#</th><th>Business</th><th>Phone</th><th>Email</th></tr></thead>
             <tbody id="previewBody">
               <tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>
             </tbody>
@@ -315,7 +331,7 @@
   <!-- ===== Status Bar ===== -->
   <footer class="status-bar">
     <span id="status">Ready.</span>
-    <span class="version">v4.0.0</span>
+    <span class="version">v4.1.0</span>
   </footer>
 
   <script src="popup.js"></script>

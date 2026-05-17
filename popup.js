@@ -7,10 +7,13 @@ const statusEl = $("status");
 
 // Fields config
 const ALL_FIELDS = ["title", "phone", "email", "website", "address", "category",
-  "rating", "reviewCount", "hours", "domain", "latitude", "url"];
+  "rating", "reviewCount", "hours", "domain", "latitude", "url",
+  "facebook", "instagram", "twitter", "linkedin", "youtube", "whatsapp"];
 const DEFAULT_FIELDS = {
   title: true, phone: true, email: true, website: true,
   address: true, category: true, rating: true, reviewCount: true,
+  facebook: true, instagram: true, linkedin: true,
+  twitter: false, youtube: false, whatsapp: false,
   hours: false, domain: false, latitude: false, url: false
 };
 
@@ -115,13 +118,14 @@ async function refreshCounts() {
 // ===== Settings Load/Save =====
 async function loadSettings() {
   const s = await chrome.storage.local.get([
-    "autoScrape", "deepEnrich", "autoMaxPages", "fields",
+    "autoScrape", "deepEnrich", "autoEnrichWebsite", "autoMaxPages", "fields",
     "profileWait", "targetLeads", "searchScroll",
     "randomDelay", "captchaDetect", "autoResume",
     "savedKeywords", "savedLocations", "webhookUrl", "webhookEnabled"
   ]);
 
   $("autoScrape").checked = !!s.autoScrape;
+  $("autoEnrichWebsite").checked = s.autoEnrichWebsite !== false;
   $("deepEnrich").checked = !!s.deepEnrich;
   $("autoMaxPages").value = s.autoMaxPages || 50;
   $("profileWait").value = s.profileWait || 7;
@@ -415,8 +419,8 @@ async function renderPreviewTable() {
   tbody.innerHTML = last10.map((lead, i) => {
     const name = (lead.title || "\u2014").slice(0, 20);
     const phone = (lead.phone || "\u2014").slice(0, 14);
-    const addr = (lead.address || "\u2014").slice(0, 18);
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
+    const email = (lead.email || "\u2014").slice(0, 22);
+    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${lead.email || ''}">${email}</td></tr>`;
   }).join("");
 }
 
@@ -493,6 +497,7 @@ $("rotationThreshold").addEventListener("change", async (e) => {
 
 // ===== Settings Listeners =====
 $("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
+$("autoEnrichWebsite").addEventListener("change", (e) => saveSetting("autoEnrichWebsite", e.target.checked));
 $("deepEnrich").addEventListener("change", (e) => saveSetting("deepEnrich", e.target.checked));
 $("autoMaxPages").addEventListener("change", (e) => saveSetting("autoMaxPages", Number(e.target.value) || 50));
 $("profileWait").addEventListener("change", (e) => saveSetting("profileWait", Number(e.target.value)));
