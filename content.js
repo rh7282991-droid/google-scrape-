@@ -1,79 +1,28 @@
 // ============================================
-// Maps Lead Scraper Pro — content script v4.1
-// Extracts business profiles from Google Maps
-// + Social media + auto email enrichment
+// Maps Lead Scraper Pro v5.0 — Snapshot Architecture
+// Phase 1: CAPTURE (fast click + save HTML)
+// Phase 2: PASSIVE (auto-save while browsing)
 // ============================================
 
 (function () {
   "use strict";
 
-  // ===== Regex helpers =====
-  const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-  const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
-
-  // Social media URL patterns
-  const SOCIAL_PATTERNS = {
-    facebook:  /(?:https?:\/\/)?(?:www\.|m\.|web\.)?facebook\.com\/(?!sharer|share|tr|plugins|dialog)([A-Za-z0-9._\-/?=&%]+)/i,
-    instagram: /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?!p\/|reel\/|stories\/|explore\/)([A-Za-z0-9._\-]+)/i,
-    twitter:   /(?:https?:\/\/)?(?:www\.|mobile\.)?(?:twitter|x)\.com\/(?!share|intent|home|search)([A-Za-z0-9_]+)/i,
-    linkedin:  /(?:https?:\/\/)?(?:www\.|[a-z]{2}\.)?linkedin\.com\/(?:company|in|school|pub)\/([A-Za-z0-9._\-]+)/i,
-    youtube:   /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/(?:c\/|channel\/|user\/|@)([A-Za-z0-9._\-]+)/i,
-    tiktok:    /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@([A-Za-z0-9._\-]+)/i,
-    whatsapp:  /(?:https?:\/\/)?(?:wa\.me|api\.whatsapp\.com\/send|chat\.whatsapp\.com)[^\s"'<>]*/i,
-    pinterest: /(?:https?:\/\/)?(?:www\.)?pinterest\.[a-z.]+\/([A-Za-z0-9._\-]+)/i
-  };
-
-  let CAMPAIGN_RUNNING = false;
+  let CAPTURE_RUNNING = false;
   let SHOULD_STOP = false;
 
   // ============================================
-  // CAPTCHA Detection
+  // Helpers
   // ============================================
-  function detectCaptcha() {
-    if (location.pathname.includes("/sorry/") || location.hostname.includes("sorry.google")) {
-      return { detected: true, type: "sorry-page" };
-    }
-    const bodyText = (document.body && document.body.innerText || "").toLowerCase();
-    const phrases = [
-      "unusual traffic", "our systems have detected",
-      "please show you're not a robot", "i'm not a robot",
-      "verify you are human", "automated queries"
-    ];
-    for (const phrase of phrases) {
-      if (bodyText.includes(phrase)) return { detected: true, type: "challenge-text", phrase };
-    }
-    if (
-      document.querySelector("#captcha") ||
-      document.querySelector(".g-recaptcha") ||
-      document.querySelector('iframe[src*="recaptcha"]')
-    ) {
-      return { detected: true, type: "recaptcha-element" };
-    }
-    return { detected: false };
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  function randomDelay(base) {
+    return base + (Math.random() - 0.3) * base * 0.4;
   }
 
-  async function handleCaptcha(info) {
-    const COOLDOWN_MS = 30 * 60 * 1000;
-    const cooldownUntil = Date.now() + COOLDOWN_MS;
-    await chrome.storage.local.set({
-      autoScrape: false,
-      captchaDetected: { detected: true, type: info.type, detectedAt: Date.now(), cooldownUntil, url: location.href }
-    });
-    await setProgress({
-      isRunning: false,
-      title: "Paused: CAPTCHA detected",
-      currentItem: `Cooldown 30 min. Resume after ${new Date(cooldownUntil).toLocaleTimeString()}`
-    });
-    showToast("Suspicious activity detected. Pausing 30 min.", "#dc2626");
-    try {
-      await chrome.runtime.sendMessage({ type: "CAPTCHA_DETECTED", info: { ...info, cooldownUntil, url: location.href } });
-      await chrome.runtime.sendMessage({ type: "ACCOUNT_FLAGGED", reason: "captcha" });
-    } catch (_) {}
+  function isMapsPage() {
+    return /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(location.href);
   }
 
-  // ============================================
-  // Toast
-  // ============================================
   function showToast(message, color) {
     let toast = document.getElementById("__mls_toast__");
     if (!toast) {
@@ -98,427 +47,313 @@
   }
 
   // ============================================
-  // Storage helpers
+  // CAPTCHA Detection
+  // ============================================
+  function detectCaptcha() {
+    if (location.pathname.includes("/sorry/") || location.hostname.includes("sorry.google")) {
+      return { detected: true, type: "sorry-page" };
+    }
+    const bodyText = (document.body && document.body.innerText || "").toLowerCase();
+    const phrases = ["unusual traffic", "our systems have detected", "please show you're not a robot", "verify you are human"];
+    for (const phrase of phrases) {
+      if (bodyText.includes(phrase)) return { detected: true, type: "challenge-text" };
+    }
+    if (document.querySelector("#captcha") || document.querySelector(".g-recaptcha") || document.querySelector('iframe[src*="recaptcha"]')) {
+      return { detected: true, type: "recaptcha-element" };
+    }
+    return { detected: false };
+  }
+
+  async function handleCaptcha() {
+    const cooldownUntil = Date.now() + 30 * 60 * 1000;
+    await chrome.storage.local.set({
+      captchaDetected: { detected: true, detectedAt: Date.now(), cooldownUntil, url: location.href }
+    });
+    await setProgress({ isRunning: false, title: "CAPTCHA detected — paused 30 min" });
+    showToast("CAPTCHA detected! Pausing 30 min.", "#dc2626");
+    try { await chrome.runtime.sendMessage({ type: "CAPTCHA_DETECTED", info: { cooldownUntil } }); } catch (_) {}
+  }
+
+  // ============================================
+  // Progress helper
   // ============================================
   async function setProgress(patch) {
     const { progress = {} } = await chrome.storage.local.get(["progress"]);
-    await chrome.storage.local.set({
-      progress: { ...progress, ...patch, updatedAt: Date.now() }
-    });
-  }
-
-  async function clearProgress() {
-    await chrome.storage.local.set({ progress: { isRunning: false } });
-  }
-
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function randomDelay(base) {
-    const variance = base * 0.4;
-    return base + (Math.random() - 0.5) * variance;
+    await chrome.storage.local.set({ progress: { ...progress, ...patch, updatedAt: Date.now() } });
   }
 
   // ============================================
-  // Page detection
+  // Find results container (sidebar feed)
   // ============================================
-  function isMapsPage() {
-    return /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(location.href);
-  }
-
-  function isGoogleSearchPage() {
-    return /^https?:\/\/(www\.)?google\.com\/search/.test(location.href);
-  }
-
-  // ============================================
-  // Social media extraction from text/HTML
-  // ============================================
-  function extractSocialFromText(text) {
-    const out = {};
-    for (const [platform, regex] of Object.entries(SOCIAL_PATTERNS)) {
-      const m = text.match(regex);
-      if (m) {
-        let url = m[0];
-        if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-        out[platform] = url.split(/[\s"'<>]/)[0];
-      }
-    }
-    return out;
-  }
-
-  // ============================================
-  // GOOGLE MAPS SCRAPER
-  // ============================================
-
   function findResultsContainer() {
-    let feed = document.querySelector('div[role="feed"]');
-    if (feed) return feed;
-    feed = document.querySelector('[aria-label*="Results for" i]');
-    if (feed) return feed;
-    feed = document.querySelector('.section-scrollbox, .section-listbox');
-    return feed || null;
+    return document.querySelector('div[role="feed"]') ||
+           document.querySelector('[aria-label*="Results for" i]') ||
+           document.querySelector('.section-scrollbox, .section-listbox') || null;
   }
 
-  async function extractDetailPanel() {
-    const out = {};
-    let attempts = 0;
-    while (attempts < 8) {
-      const heading = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"]');
-      if (heading) break;
-      await sleep(400);
-      attempts++;
-    }
-
-    // Title
-    const heading = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"], h1');
-    if (heading) out.title = heading.textContent.trim();
-
-    // URL
-    out.url = location.href;
-
-    // Rating
-    const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"], span.ceNzKf');
-    if (ratingEl) {
-      const r = parseFloat(ratingEl.textContent);
-      if (r) out.rating = r;
-    }
-
-    // Review count
-    const reviewEl = document.querySelector('button[jsaction*="reviewChart"] span, span.UY7F9');
-    if (reviewEl) {
-      const m = reviewEl.textContent.match(/(\d[\d,]*)/);
-      if (m) out.reviewCount = parseInt(m[1].replace(/,/g, ""));
-    }
-
-    // Category
-    const catEl = document.querySelector('button[jsaction*="category"], .DkEaL');
-    if (catEl) out.category = catEl.textContent.trim();
-
-    // Action buttons
-    const buttons = document.querySelectorAll('button[data-item-id], a[data-item-id]');
-    buttons.forEach(btn => {
-      const id = btn.getAttribute("data-item-id") || "";
-      const aria = btn.getAttribute("aria-label") || "";
-      const text = btn.textContent.trim();
-
-      if (id.includes("phone") || id.startsWith("phone:tel:") || aria.toLowerCase().includes("phone")) {
-        const m = (aria + " " + text).match(/\+?[\d][\d\s\-().]{7,}\d/);
-        if (m) out.phone = m[0].trim();
+  // ============================================
+  // Get all place links from results
+  // ============================================
+  function getAllPlaceLinks(container) {
+    const links = container.querySelectorAll('a[href*="/maps/place/"]');
+    const results = [];
+    const seen = new Set();
+    links.forEach(link => {
+      if (!seen.has(link.href)) {
+        seen.add(link.href);
+        // Get place name from aria-label
+        const name = link.getAttribute("aria-label") || "";
+        results.push({ link, name, href: link.href });
       }
-      if (id === "address" || aria.toLowerCase().includes("address")) {
-        out.address = text || aria.replace(/^address[: ]/i, "").trim();
-      }
-      if (id === "authority" || aria.toLowerCase().includes("website")) {
-        out.website = btn.href || btn.getAttribute("data-url") || "";
-      }
-      if (id.startsWith("oh") || aria.toLowerCase().includes("hours")) {
-        out.hours = text.split("\n")[0];
-      }
-      if (id === "plus_code") out.plusCode = text;
     });
-
-    // Phone fallback
-    if (!out.phone) {
-      const tel = document.querySelector('a[href^="tel:"]');
-      if (tel) out.phone = tel.href.replace(/^tel:/, "").trim();
-    }
-
-    // ===== EMAIL EXTRACTION =====
-    // 1. mailto: links
-    const mailto = document.querySelector('a[href^="mailto:"]');
-    if (mailto) out.email = mailto.href.replace(/^mailto:/, "").split("?")[0].trim();
-
-    // 2. Search panel text for emails
-    if (!out.email) {
-      const panelText = document.body.innerText || "";
-      const emailMatches = panelText.match(EMAIL_RE);
-      if (emailMatches && emailMatches.length) {
-        // Filter junk emails
-        const clean = emailMatches.filter(e =>
-          !/(example|test|noreply|no-reply|sentry|wixpress|googleusercontent)\./i.test(e) &&
-          !/\.(png|jpg|gif|svg)$/i.test(e)
-        );
-        if (clean.length) out.email = clean[0].toLowerCase();
-      }
-    }
-
-    // ===== SOCIAL MEDIA EXTRACTION =====
-    // Look at all <a> hrefs in the side panel
-    const allLinks = Array.from(document.querySelectorAll('a[href]'))
-      .map(a => a.href)
-      .filter(href => href && !href.includes("google.com") && !href.includes("gstatic"));
-    const linksText = allLinks.join("\n");
-    const socials = extractSocialFromText(linksText);
-    Object.assign(out, socials);
-
-    // Domain
-    if (out.website) {
-      try { out.domain = new URL(out.website).hostname.replace(/^www\./, ""); } catch (_) {}
-    }
-
-    // Coordinates
-    const m = location.href.match(/!3d(-?[\d.]+)!4d(-?[\d.]+)/);
-    if (m) {
-      out.latitude = parseFloat(m[1]);
-      out.longitude = parseFloat(m[2]);
-    }
-
-    out.scrapedAt = new Date().toISOString();
-    return out;
+    return results;
   }
 
-  async function scrollResults(container, settings) {
-    const maxScrolls = settings.searchScroll || 25;
-    const waitMs = (settings.profileWait || 2) * 250;
-
+  // ============================================
+  // Scroll results to load more
+  // ============================================
+  async function scrollResults(container, maxScrolls) {
     let lastHeight = container.scrollHeight;
     let scrollCount = 0;
     let stuckCount = 0;
 
     while (scrollCount < maxScrolls && !SHOULD_STOP) {
-      if (scrollCount % 5 === 0) {
-        const cap = detectCaptcha();
-        if (cap.detected) {
-          await handleCaptcha(cap);
-          return;
-        }
+      if (scrollCount % 5 === 0 && detectCaptcha().detected) {
+        await handleCaptcha();
+        return false;
       }
 
       container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-      await sleep(randomDelay(waitMs));
+      await sleep(800 + Math.random() * 400);
       scrollCount++;
 
-      const newHeight = container.scrollHeight;
       const cards = container.querySelectorAll('a[href*="/maps/place/"]');
-
       await setProgress({
         isRunning: true,
-        title: "Scrolling Maps results...",
+        title: "Scrolling results...",
         currentPage: scrollCount,
         totalPages: maxScrolls,
-        currentItem: `Found ${cards.length} businesses so far`,
-        totalFound: cards.length
+        totalFound: cards.length,
+        currentItem: `Found ${cards.length} places`
       });
 
       const endText = container.innerText || "";
-      if (endText.includes("You've reached the end") || endText.toLowerCase().includes("no more")) {
-        showToast("Reached end of results");
-        break;
-      }
+      if (endText.includes("You've reached the end") || endText.includes("no more")) break;
 
-      if (newHeight === lastHeight) {
-        stuckCount++;
-        if (stuckCount >= 3) break;
-      } else {
-        stuckCount = 0;
-      }
+      const newHeight = container.scrollHeight;
+      if (newHeight === lastHeight) { stuckCount++; if (stuckCount >= 3) break; }
+      else stuckCount = 0;
       lastHeight = newHeight;
     }
-  }
-
-  function getAllCards(container) {
-    const links = container.querySelectorAll('a[href*="/maps/place/"]');
-    const cards = [];
-    const seen = new Set();
-    links.forEach(link => {
-      let card = link.closest('div[jsaction], div[role="article"]') || link.parentElement;
-      if (card && !seen.has(link.href)) {
-        seen.add(link.href);
-        cards.push({ card, link });
-      }
-    });
-    return cards;
+    return true;
   }
 
   // ============================================
-  // Auto-enrich website during campaign
-  // (calls background to fetch website HTML)
+  // CAPTURE: Get detail panel HTML (the key!)
   // ============================================
-  async function enrichLeadFromWebsite(lead) {
-    if (!lead.website) return lead;
-    try {
-      const res = await chrome.runtime.sendMessage({
-        type: "ENRICH_WEBSITE",
-        url: lead.website
-      });
-      if (res && res.ok && res.contacts) {
-        const c = res.contacts;
-        if (c.emails && c.emails.length && !lead.email) lead.email = c.emails[0];
-        if (c.phones && c.phones.length && !lead.phone) lead.phone = c.phones[0];
-        if (c.allEmails) lead.allEmails = c.allEmails;
-        // Merge socials
-        const SOCIAL_KEYS = ["facebook","instagram","twitter","linkedin","youtube","tiktok","whatsapp","pinterest"];
-        for (const k of SOCIAL_KEYS) {
-          if (c[k] && !lead[k]) lead[k] = c[k];
-        }
-      }
-    } catch (_) {}
-    return lead;
+  function getDetailPanelHTML() {
+    // The detail panel — multiple possible selectors
+    const panel = document.querySelector('div[role="main"]') ||
+                  document.querySelector('.section-hero-header-title-description') ||
+                  document.querySelector('[data-attrid]')?.closest('div[role="main"]');
+
+    if (panel) return panel.innerHTML;
+
+    // Fallback: get the whole right side
+    const rightPanel = document.querySelector('.section-layout-root') ||
+                       document.querySelector('[role="main"]');
+    if (rightPanel) return rightPanel.innerHTML;
+
+    // Last resort: save relevant portion of body
+    return document.body.innerHTML;
+  }
+
+  // Quick name extraction from panel (for label only)
+  function getQuickName() {
+    const h1 = document.querySelector('h1.DUwDvf, h1[class*="fontHeadlineLarge"], h1');
+    return h1 ? h1.textContent.trim() : "";
   }
 
   // ============================================
-  // Main Maps campaign runner
+  // PHASE 1: CAPTURE MODE
+  // Fast click through places, save only HTML
   // ============================================
-  async function runMapsCampaign() {
-    if (CAMPAIGN_RUNNING) {
-      showToast("Campaign already running", "#f59e0b");
+  async function runCapture() {
+    if (CAPTURE_RUNNING) {
+      showToast("Capture already running", "#f59e0b");
       return { ok: false, error: "already-running" };
     }
-    CAMPAIGN_RUNNING = true;
+    CAPTURE_RUNNING = true;
     SHOULD_STOP = false;
 
-    const settings = await chrome.storage.local.get([
-      "targetLeads", "searchScroll", "profileWait",
-      "deepEnrich", "autoEnrichWebsite", "fields", "savedKeywords", "savedLocations"
-    ]);
+    const settings = await chrome.storage.local.get(["targetLeads", "searchScroll", "captureWait"]);
     const target = settings.targetLeads || 100;
-    const autoEnrich = settings.autoEnrichWebsite !== false; // ON by default
+    const maxScrolls = settings.searchScroll || 25;
+    const waitPerPlace = (settings.captureWait || 2) * 1000; // default 2 sec — FAST!
 
-    showToast("Starting Maps scrape...", "#2563eb");
+    showToast("Starting capture...", "#2563eb");
 
-    const cap = detectCaptcha();
-    if (cap.detected) {
-      await handleCaptcha(cap);
-      CAMPAIGN_RUNNING = false;
+    // CAPTCHA check
+    if (detectCaptcha().detected) {
+      await handleCaptcha();
+      CAPTURE_RUNNING = false;
       return { ok: false, captcha: true };
     }
 
+    // Find results
     const container = findResultsContainer();
     if (!container) {
-      showToast("Maps results sidebar not found. Make sure search results are visible.", "#dc2626");
-      CAMPAIGN_RUNNING = false;
+      showToast("No results found. Search something on Maps first.", "#dc2626");
+      CAPTURE_RUNNING = false;
       return { ok: false, error: "no-feed" };
     }
 
-    await setProgress({
-      isRunning: true,
-      title: "Loading Maps results...",
-      currentPage: 0,
-      totalPages: settings.searchScroll || 25,
-      totalFound: 0,
-      currentItem: "Scrolling sidebar..."
-    });
+    await setProgress({ isRunning: true, title: "Scrolling to load places...", currentPage: 0, totalPages: maxScrolls, totalFound: 0 });
 
-    await scrollResults(container, settings);
-
-    if (SHOULD_STOP) {
-      CAMPAIGN_RUNNING = false;
-      await clearProgress();
+    // Scroll to load
+    const scrollOk = await scrollResults(container, maxScrolls);
+    if (!scrollOk || SHOULD_STOP) {
+      CAPTURE_RUNNING = false;
+      await setProgress({ isRunning: false });
       return { ok: true, stopped: true };
     }
 
-    const cards = getAllCards(container);
-    showToast(`Found ${cards.length} businesses, extracting data...`, "#2563eb");
+    // Get all place links
+    const places = getAllPlaceLinks(container);
+    const toCapture = Math.min(places.length, target);
+    showToast(`Found ${places.length} places. Capturing ${toCapture}...`, "#2563eb");
 
-    let totalSaved = 0;
-    const profileWaitMs = (settings.profileWait || 7) * 1000;
+    // Load existing snapshots
+    const { snapshots = [] } = await chrome.storage.local.get(["snapshots"]);
+    const existingUrls = new Set(snapshots.map(s => s.url));
 
-    for (let i = 0; i < cards.length && i < target; i++) {
+    let captured = 0;
+
+    for (let i = 0; i < toCapture; i++) {
       if (SHOULD_STOP) break;
 
-      if (i % 10 === 0) {
-        const c = detectCaptcha();
-        if (c.detected) {
-          await handleCaptcha(c);
-          break;
-        }
+      // CAPTCHA check every 15 places
+      if (i > 0 && i % 15 === 0 && detectCaptcha().detected) {
+        await handleCaptcha();
+        break;
+      }
+
+      const place = places[i];
+
+      // Skip already captured
+      if (existingUrls.has(place.href)) {
+        await setProgress({ currentItem: `Skipping (already cached): ${place.name.slice(0, 30)}` });
+        continue;
       }
 
       await setProgress({
         isRunning: true,
-        title: "Extracting profile " + (i + 1),
+        title: `Capturing ${i + 1}/${toCapture}`,
         currentPage: i + 1,
-        totalPages: Math.min(cards.length, target),
-        totalFound: totalSaved,
-        currentItem: `Profile ${i + 1}/${cards.length}`
+        totalPages: toCapture,
+        totalFound: captured,
+        currentItem: place.name.slice(0, 40) || `Place ${i + 1}`
       });
 
-      try {
-        cards[i].link.click();
-        await sleep(randomDelay(profileWaitMs));
+      // Click the place
+      place.link.click();
 
-        let data = await extractDetailPanel();
-        if (data && data.title) {
-          // Auto-enrich from website (for email + socials)
-          if (autoEnrich && data.website && (!data.email || !data.facebook)) {
-            await setProgress({ currentItem: `Enriching: ${data.domain || data.website}` });
-            data = await enrichLeadFromWebsite(data);
-          }
+      // Wait for detail panel to load (FAST — just 2 sec)
+      await sleep(randomDelay(waitPerPlace));
 
-          const added = await saveLead(data);
-          if (added) totalSaved++;
-        }
-      } catch (e) {
-        console.warn("[Maps] Failed to extract profile:", e);
+      // Grab HTML
+      const html = getDetailPanelHTML();
+      const name = getQuickName() || place.name || `Place ${i + 1}`;
+      const currentUrl = location.href;
+
+      // Save snapshot
+      const snapshot = {
+        id: "snap_" + Date.now() + "_" + i,
+        url: currentUrl,
+        name: name,
+        html: html,
+        capturedAt: new Date().toISOString(),
+        extracted: false
+      };
+
+      snapshots.push(snapshot);
+      existingUrls.add(currentUrl);
+      captured++;
+
+      // Save every 5 snapshots (batch save for performance)
+      if (captured % 5 === 0 || i === toCapture - 1) {
+        await chrome.storage.local.set({ snapshots });
       }
-
-      try {
-        await chrome.runtime.sendMessage({ type: "ACCOUNT_LEADS_INCREMENT", count: 1 });
-      } catch (_) {}
     }
+
+    // Final save
+    await chrome.storage.local.set({ snapshots });
 
     await setProgress({
       isRunning: false,
-      title: "Campaign complete",
-      currentItem: `Saved ${totalSaved} new leads`
+      title: "Capture complete!",
+      currentItem: `${captured} new snapshots saved. Total: ${snapshots.length}`
     });
-    setTimeout(clearProgress, 4000);
 
-    showToast(`\u2713 Done! Saved ${totalSaved} new leads.`, "#22c55e");
-    CAMPAIGN_RUNNING = false;
-    return { ok: true, saved: totalSaved };
+    showToast(`Done! Captured ${captured} places. Go to Extract to get your data.`, "#22c55e");
+    CAPTURE_RUNNING = false;
+    return { ok: true, captured, total: snapshots.length };
   }
 
   // ============================================
-  // Save lead to storage (with dedup)
+  // PASSIVE CAPTURE MODE
+  // Auto-save HTML when user clicks a place
   // ============================================
-  async function saveLead(data) {
-    const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
+  let lastPanelUrl = "";
+  let passiveObserver = null;
 
-    const exists = leads.some(l =>
-      (l.url && l.url === data.url) ||
-      (l.title === data.title && l.address === data.address && l.title)
-    );
-    if (exists) return false;
+  async function startPassiveCapture() {
+    if (passiveObserver) return; // already active
 
-    // All possible fields (must match popup.js ALL_FIELDS)
-    const ALL_POSSIBLE = [
-      "title", "url", "phone", "address", "website", "domain",
-      "category", "rating", "reviewCount", "hours", "email",
-      "latitude", "longitude", "plusCode",
-      "facebook", "instagram", "twitter", "linkedin", "youtube",
-      "tiktok", "whatsapp", "pinterest"
-    ];
+    showToast("Passive capture ON — browsing will auto-save places", "#22c55e");
 
-    // Fallback: if no fields config exists, allow common ones
-    const hasUserSelection = Object.keys(fields).length > 0;
-    const filtered = {};
+    // Watch URL changes (place clicks change URL)
+    passiveObserver = setInterval(async () => {
+      const currentUrl = location.href;
+      if (currentUrl === lastPanelUrl) return;
+      if (!currentUrl.includes("/maps/place/")) return;
 
-    for (const f of ALL_POSSIBLE) {
-      // Only save if user has selected this field (or no selection set yet)
-      const userWants = hasUserSelection ? !!fields[f] : true;
-      if (!userWants) continue;
-      if (data[f] !== undefined && data[f] !== null && data[f] !== "") {
-        filtered[f] = data[f];
-      }
+      lastPanelUrl = currentUrl;
+
+      // Wait a moment for panel to render
+      await sleep(1500);
+
+      const html = getDetailPanelHTML();
+      const name = getQuickName();
+      if (!name) return; // No panel loaded
+
+      const { snapshots = [] } = await chrome.storage.local.get(["snapshots"]);
+
+      // Check if already saved
+      if (snapshots.some(s => s.url === currentUrl)) return;
+
+      const snapshot = {
+        id: "snap_" + Date.now(),
+        url: currentUrl,
+        name: name,
+        html: html,
+        capturedAt: new Date().toISOString(),
+        extracted: false
+      };
+
+      snapshots.push(snapshot);
+      await chrome.storage.local.set({ snapshots });
+
+      showToast(`Auto-saved: ${name.slice(0, 25)}`, "#2563eb");
+    }, 2000);
+  }
+
+  function stopPassiveCapture() {
+    if (passiveObserver) {
+      clearInterval(passiveObserver);
+      passiveObserver = null;
+      showToast("Passive capture OFF", "#64748b");
     }
-
-    // Always save title (required for dedup) + url (required for dedup)
-    if (data.title) filtered.title = data.title;
-    if (data.url) filtered.url = data.url;
-
-    // Internal-only metadata (not user-facing field)
-    filtered.scrapedAt = new Date().toISOString();
-    if (data.deepScrapedAt) filtered.deepScrapedAt = data.deepScrapedAt;
-
-    leads.push(filtered);
-    await chrome.storage.local.set({ leads });
-
-    const { todayLeadCount = 0, todayLeadDate } = await chrome.storage.local.get(["todayLeadCount", "todayLeadDate"]);
-    const today = new Date().toDateString();
-    const newCount = (todayLeadDate === today) ? todayLeadCount + 1 : 1;
-    await chrome.storage.local.set({ todayLeadCount: newCount, todayLeadDate: today });
-
-    return true;
   }
 
   // ============================================
@@ -527,19 +362,24 @@
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       try {
-        if (msg.type === "SCRAPE_NOW") {
-          if (isMapsPage()) {
-            const r = await runMapsCampaign();
-            sendResponse(r);
-          } else {
-            sendResponse({ ok: false, error: "Open Google Maps first" });
-          }
-        } else if (msg.type === "STOP_SCRAPE") {
+        if (msg.type === "CAPTURE_START") {
+          const r = await runCapture();
+          sendResponse(r);
+        } else if (msg.type === "CAPTURE_STOP") {
           SHOULD_STOP = true;
-          showToast("Stopping after current item...", "#f59e0b");
+          showToast("Stopping after current place...", "#f59e0b");
+          sendResponse({ ok: true });
+        } else if (msg.type === "PASSIVE_START") {
+          await startPassiveCapture();
+          sendResponse({ ok: true });
+        } else if (msg.type === "PASSIVE_STOP") {
+          stopPassiveCapture();
           sendResponse({ ok: true });
         } else if (msg.type === "PING") {
-          sendResponse({ ok: true, page: isMapsPage() ? "maps" : (isGoogleSearchPage() ? "search" : "other") });
+          sendResponse({ ok: true, page: isMapsPage() ? "maps" : "other", capturing: CAPTURE_RUNNING });
+        } else if (msg.type === "GET_SNAPSHOT_COUNT") {
+          const { snapshots = [] } = await chrome.storage.local.get(["snapshots"]);
+          sendResponse({ ok: true, total: snapshots.length, unextracted: snapshots.filter(s => !s.extracted).length });
         }
       } catch (e) {
         sendResponse({ ok: false, error: String(e?.message || e) });
@@ -549,27 +389,17 @@
   });
 
   // ============================================
-  // Auto-start on Maps if autoScrape is on
+  // Auto-start passive if setting is ON
   // ============================================
   (async () => {
+    if (!isMapsPage()) return;
+
     const cap = detectCaptcha();
-    if (cap.detected) {
-      await handleCaptcha(cap);
-      return;
-    }
+    if (cap.detected) { await handleCaptcha(); return; }
 
-    const { autoScrape, captchaDetected } = await chrome.storage.local.get(["autoScrape", "captchaDetected"]);
-
-    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
-      const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
-      await setProgress({ isRunning: false, title: "Cooldown", currentItem: `${minsLeft} min remaining` });
-      return;
-    }
-
-    if (autoScrape && isMapsPage()) {
-      setTimeout(async () => {
-        await runMapsCampaign();
-      }, 2000);
+    const { passiveCapture } = await chrome.storage.local.get(["passiveCapture"]);
+    if (passiveCapture) {
+      await startPassiveCapture();
     }
   })();
 

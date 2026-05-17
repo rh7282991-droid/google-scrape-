@@ -731,3 +731,112 @@ textarea::placeholder, input::placeholder {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+
+/* ===== v5.0 Additions ===== */
+
+/* Info Box */
+.info-box {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 11px;
+  color: #1e40af;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.info-box strong { display: block; font-size: 12px; margin-bottom: 2px; }
+.info-box.success {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+}
+
+/* Passive Status */
+.passive-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #166534;
+  font-weight: 500;
+  margin-top: 10px;
+}
+.dot-green {
+  width: 8px; height: 8px;
+  background: #22c55e;
+  border-radius: 50%;
+  animation: pulse 1s infinite;
+  flex-shrink: 0;
+}
+
+/* Capture List */
+.preview-list {
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.capture-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  font-size: 11px;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+}
+.capture-item.extracted { opacity: 0.5; }
+.capture-name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.capture-badge {
+  font-size: 10px;
+  color: #22c55e;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+.capture-item:not(.extracted) .capture-badge { color: #3b82f6; }
+
+/* Export Section */
+.export-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+.export-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.export-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* Cache Section */
+.cache-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+.cache-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.cache-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}

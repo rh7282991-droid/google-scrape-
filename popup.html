@@ -13,7 +13,7 @@
       <img src="assets/logo.svg" alt="logo" class="logo" />
       <div class="header-text">
         <h1>Maps Scraper <span class="pro-badge">PRO</span></h1>
-        <p class="subtitle"><span id="totalLeadsHeader">0</span> Leads collected</p>
+        <p class="subtitle"><span id="totalLeadsHeader">0</span> Leads &middot; <span id="totalSnapsHeader">0</span> Cached</p>
       </div>
       <span id="statusBadge" class="status-pill ready">Ready</span>
     </div>
@@ -23,9 +23,9 @@
   <div class="step-indicator">
     <div class="step active" data-step="1"><span class="step-num">1</span><span class="step-label">Setup</span></div>
     <div class="step-line"></div>
-    <div class="step" data-step="2"><span class="step-num">2</span><span class="step-label">Collect</span></div>
+    <div class="step" data-step="2"><span class="step-num">2</span><span class="step-label">Capture</span></div>
     <div class="step-line"></div>
-    <div class="step" data-step="3"><span class="step-num">3</span><span class="step-label">Export</span></div>
+    <div class="step" data-step="3"><span class="step-num">3</span><span class="step-label">Extract</span></div>
   </div>
 
   <!-- ===== STEP 1: SETUP ===== -->
@@ -35,61 +35,43 @@
 
       <!-- Keywords -->
       <div class="form-group">
-        <label class="form-label">
-          Business Keywords
-          <span class="hint" id="keywordCount">0 keywords</span>
-        </label>
+        <label class="form-label">Business Keywords <span class="hint" id="keywordCount">0</span></label>
         <textarea id="searchInput" rows="3" placeholder="restaurant&#10;dentist&#10;hotel"></textarea>
       </div>
 
       <!-- Locations -->
       <div class="form-group">
-        <label class="form-label">
-          Locations
-          <span class="hint" id="locationCount">0 locations</span>
-        </label>
+        <label class="form-label">Locations <span class="hint" id="locationCount">0</span></label>
         <textarea id="locationInput" rows="3" placeholder="dhaka&#10;new york&#10;london"></textarea>
-        <div class="location-chips" id="locationChips"></div>
       </div>
 
       <!-- Quick Settings -->
       <div class="settings-grid">
         <div class="setting-item">
-          <label>Target Leads</label>
+          <label>Target</label>
           <input type="number" id="targetLeads" min="1" max="10000" value="100" />
         </div>
         <div class="setting-item">
-          <label>Speed</label>
-          <select id="profileWait">
-            <option value="2">Fast</option>
-            <option value="5">Normal</option>
-            <option value="7" selected>Safe</option>
-            <option value="10">Slow</option>
-            <option value="15">Stealth</option>
+          <label>Capture Speed</label>
+          <select id="captureWait">
+            <option value="1.5">Ultra Fast (1.5s)</option>
+            <option value="2" selected>Fast (2s)</option>
+            <option value="3">Normal (3s)</option>
+            <option value="5">Safe (5s)</option>
           </select>
         </div>
       </div>
 
-      <!-- Passive Capture Toggle -->
+      <!-- Passive Capture -->
       <div class="toggle-section">
         <label class="toggle-row">
           <span class="toggle-switch">
-            <input type="checkbox" id="autoScrape" />
+            <input type="checkbox" id="passiveCapture" />
             <span class="toggle-slider"></span>
           </span>
           <span class="toggle-text">
             <strong>Passive Capture</strong>
-            <small>Auto-collect when browsing Maps</small>
-          </span>
-        </label>
-        <label class="toggle-row">
-          <span class="toggle-switch">
-            <input type="checkbox" id="autoEnrichWebsite" checked />
-            <span class="toggle-slider"></span>
-          </span>
-          <span class="toggle-text">
-            <strong>Auto-Enrich Website</strong>
-            <small>Visit websites for emails + socials</small>
+            <small>Auto-save places while you browse Maps</small>
           </span>
         </label>
       </div>
@@ -124,49 +106,53 @@
         </div>
       </div>
 
-      <!-- Next Button -->
-      <button id="goToCollect" class="btn-block btn-primary btn-xl">
-        Next: Start Collection &#8594;
+      <button id="goToCapture" class="btn-block btn-primary btn-xl">
+        Next: Capture HTML &#8594;
       </button>
     </div>
   </section>
 
-  <!-- ===== STEP 2: COLLECT ===== -->
-  <section class="step-panel" id="stepCollect" style="display:none;">
+  <!-- ===== STEP 2: CAPTURE ===== -->
+  <section class="step-panel" id="stepCapture" style="display:none;">
     <div class="panel-card">
-      <div class="panel-title">Collect Leads</div>
+      <div class="panel-title">Capture Places</div>
 
-      <!-- Status Summary -->
+      <!-- Info box -->
+      <div class="info-box">
+        <strong>How it works:</strong> Extension clicks through places FAST (2-3 sec each), saves only the HTML. No data extraction yet = very low detection risk.
+      </div>
+
+      <!-- Snapshot Stats -->
       <div class="collect-summary">
         <div class="summary-stat">
-          <span class="summary-value" id="collectTotal">0</span>
-          <span class="summary-label">Collected</span>
+          <span class="summary-value" id="snapTotal">0</span>
+          <span class="summary-label">Cached</span>
         </div>
         <div class="summary-stat">
-          <span class="summary-value" id="collectTarget">100</span>
-          <span class="summary-label">Target</span>
+          <span class="summary-value" id="snapUnextracted">0</span>
+          <span class="summary-label">Pending</span>
         </div>
         <div class="summary-stat">
-          <span class="summary-value" id="collectToday">0</span>
+          <span class="summary-value" id="snapToday">0</span>
           <span class="summary-label">Today</span>
         </div>
       </div>
 
-      <!-- Progress (shown when running) -->
+      <!-- Progress -->
       <div class="progress-box" id="progressBox" style="display:none;">
         <div class="progress-header">
           <span class="dot"></span>
-          <span id="progressTitle">Capturing leads...</span>
+          <span id="progressTitle">Capturing...</span>
         </div>
         <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
         <div class="progress-meta">
-          <span>Profile <b id="progPage">0</b>/<b id="progPageTotal">0</b></span>
-          <span><b id="progFound">0</b> leads found</span>
+          <span>Place <b id="progPage">0</b>/<b id="progPageTotal">0</b></span>
+          <span><b id="progFound">0</b> saved</span>
         </div>
         <div class="progress-current" id="progCurrent"></div>
       </div>
 
-      <!-- CAPTCHA Warning -->
+      <!-- CAPTCHA -->
       <div class="captcha-banner" id="captchaBanner" style="display:none;">
         <span class="captcha-icon">&#9888;</span>
         <div class="captcha-text">
@@ -175,163 +161,139 @@
         </div>
       </div>
 
-      <!-- Main Action Button -->
-      <button id="scrapeNow" class="btn-block btn-primary btn-xl">
-        <span class="ic">&#9654;</span> Start
+      <!-- Buttons -->
+      <button id="captureBtn" class="btn-block btn-primary btn-xl">
+        <span class="ic">&#9654;</span> Start Capture
       </button>
-
-      <button id="stopBtn" class="btn-block btn-danger-ghost" style="display:none; margin-top:8px;">
+      <button id="stopCaptureBtn" class="btn-block btn-danger-ghost" style="display:none; margin-top:8px;">
         <span class="ic">&#9632;</span> Stop
       </button>
 
-      <!-- Live Preview -->
+      <!-- Passive status -->
+      <div class="passive-status" id="passiveStatus" style="display:none;">
+        <span class="dot-green"></span>
+        <span>Passive capture active — browse Maps normally</span>
+      </div>
+
+      <!-- Recent captures -->
+      <div class="preview-section" id="capturePreview">
+        <div class="preview-header">
+          <span>Recent Captures</span>
+          <span class="badge-count" id="captureCount">0</span>
+        </div>
+        <div class="preview-list" id="captureList">
+          <div class="empty-msg">No captures yet.</div>
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <div class="step-nav">
+        <button id="backToSetup" class="btn-block btn-secondary">&#8592; Setup</button>
+        <button id="goToExtract" class="btn-block btn-primary">Extract &#8594;</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== STEP 3: EXTRACT & EXPORT ===== -->
+  <section class="step-panel" id="stepExtract" style="display:none;">
+    <div class="panel-card">
+      <div class="panel-title">Extract & Export</div>
+
+      <!-- Info -->
+      <div class="info-box success">
+        <strong>Offline mode:</strong> No Google connection needed. Extract data from cached HTML instantly.
+      </div>
+
+      <!-- Stats -->
+      <div class="collect-summary">
+        <div class="summary-stat">
+          <span class="summary-value" id="extractPending">0</span>
+          <span class="summary-label">Pending</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-value" id="extractLeads">0</span>
+          <span class="summary-label">Leads</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-value" id="extractToday">0</span>
+          <span class="summary-label">Today</span>
+        </div>
+      </div>
+
+      <!-- Extract button -->
+      <button id="extractBtn" class="btn-block btn-primary btn-xl">
+        <span class="ic">&#9881;</span> Extract from Cache
+      </button>
+
+      <!-- Enrich button -->
+      <button id="enrichBtn" class="btn-block btn-secondary" style="margin-top:8px;">
+        <span class="ic">&#127760;</span> Enrich Websites (emails + socials)
+      </button>
+
+      <!-- Progress for extract/enrich -->
+      <div class="progress-box" id="extractProgressBox" style="display:none;">
+        <div class="progress-header">
+          <span class="dot"></span>
+          <span id="extractProgressTitle">Processing...</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="extractProgressFill"></div></div>
+        <div class="progress-meta">
+          <span><b id="extractProgPage">0</b>/<b id="extractProgTotal">0</b></span>
+          <span><b id="extractProgFound">0</b> extracted</span>
+        </div>
+        <div class="progress-current" id="extractProgCurrent"></div>
+      </div>
+
+      <!-- Export -->
+      <div class="export-section">
+        <div class="export-header">Export Leads</div>
+        <div class="export-grid">
+          <button id="exportCsv" class="btn-block btn-primary">
+            <span class="ic">&#128196;</span> CSV
+          </button>
+          <button id="exportJson" class="btn-block btn-secondary">
+            <span class="ic">&#123;&#125;</span> JSON
+          </button>
+        </div>
+      </div>
+
+      <!-- Cache Manager -->
+      <div class="cache-section">
+        <div class="cache-header">Cache Manager</div>
+        <div class="cache-actions">
+          <button id="clearExtracted" class="btn-mini btn-secondary">Clear Extracted</button>
+          <button id="clearAllSnaps" class="btn-mini btn-danger-ghost">Clear All Cache</button>
+          <button id="clearLeads" class="btn-mini btn-danger-ghost">Clear Leads</button>
+        </div>
+      </div>
+
+      <!-- Preview -->
       <div class="preview-section">
         <div class="preview-header">
-          <span>Live Preview</span>
-          <span class="badge-count" id="previewCount">0</span>
+          <span>Recent Leads</span>
+          <span class="badge-count" id="leadsCount">0</span>
         </div>
-        <div class="preview-table-wrap" id="previewTableWrap">
+        <div class="preview-table-wrap">
           <table class="preview-table">
             <thead><tr><th>#</th><th>Business</th><th>Phone</th><th>Email</th></tr></thead>
             <tbody id="previewBody">
-              <tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>
+              <tr><td colspan="4" class="empty-msg">Extract from cache to see leads here.</td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
-      <!-- Navigation -->
+      <!-- Nav -->
       <div class="step-nav">
-        <button id="backToSetup" class="btn-block btn-secondary">&#8592; Setup</button>
-        <button id="goToExport" class="btn-block btn-primary">Export &#8594;</button>
+        <button id="backToCapture" class="btn-block btn-secondary">&#8592; Capture</button>
       </div>
     </div>
   </section>
-
-  <!-- ===== STEP 3: EXPORT ===== -->
-  <section class="step-panel" id="stepExport" style="display:none;">
-    <div class="panel-card">
-      <div class="panel-title">Get Your Data</div>
-
-      <div class="export-summary">
-        <div class="export-count"><span id="exportTotal">0</span> leads ready</div>
-      </div>
-
-      <!-- Download -->
-      <button id="exportCsv" class="btn-block btn-primary btn-xl">
-        <span class="ic">&#128229;</span> Download CSV
-      </button>
-
-      <button id="exportJson" class="btn-block btn-secondary" style="margin-top:8px;">
-        <span class="ic">&#123;&#125;</span> Download JSON
-      </button>
-
-      <!-- Webhook -->
-      <div class="webhook-section">
-        <div class="webhook-header" id="webhookToggle">
-          <span>Webhook (auto-send)</span>
-          <span class="toggle-switch small">
-            <input type="checkbox" id="webhookEnabled" />
-            <span class="toggle-slider"></span>
-          </span>
-        </div>
-        <div class="webhook-body" id="webhookBody" style="display:none;">
-          <input type="text" id="webhookUrl" placeholder="https://your-webhook-url.com/endpoint" />
-          <button id="testWebhook" class="btn-mini btn-primary" style="margin-top:6px;">Test</button>
-        </div>
-      </div>
-
-      <!-- Clear -->
-      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:16px;">
-        <span class="ic">&#128465;</span> Clear All Leads
-      </button>
-
-      <!-- Navigation -->
-      <div class="step-nav">
-        <button id="backToCollect" class="btn-block btn-secondary">&#8592; Back</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Advanced (Hidden by default) ===== -->
-  <div class="advanced-section">
-    <button class="advanced-toggle" id="advancedToggle">
-      &#9881; Advanced Settings
-    </button>
-    <div class="advanced-body" id="advancedBody" style="display:none;">
-
-      <!-- Anti-Detection (auto-enabled) -->
-      <div class="adv-group">
-        <div class="adv-group-title">Anti-Detection</div>
-        <label class="toggle-row mini">
-          <span class="toggle-switch">
-            <input type="checkbox" id="randomDelay" checked />
-            <span class="toggle-slider"></span>
-          </span>
-          <span class="toggle-text"><strong>Random Delays</strong></span>
-        </label>
-        <label class="toggle-row mini">
-          <span class="toggle-switch">
-            <input type="checkbox" id="captchaDetect" checked />
-            <span class="toggle-slider"></span>
-          </span>
-          <span class="toggle-text"><strong>CAPTCHA Detection</strong></span>
-        </label>
-        <label class="toggle-row mini">
-          <span class="toggle-switch">
-            <input type="checkbox" id="autoResume" checked />
-            <span class="toggle-slider"></span>
-          </span>
-          <span class="toggle-text"><strong>Auto-Resume</strong></span>
-        </label>
-      </div>
-
-      <!-- Account Rotation -->
-      <div class="adv-group">
-        <div class="adv-group-title">Account Rotation</div>
-        <div class="account-info" id="accountInfo">
-          <small>Add accounts to auto-rotate every 50 leads.</small>
-        </div>
-        <div class="account-list" id="accountList"></div>
-        <div class="inline-row">
-          <input type="text" id="newAccountLabel" placeholder="account@gmail.com" class="input-sm" />
-          <button id="addAccountBtn" class="btn-mini btn-primary">Add</button>
-        </div>
-        <div class="inline-row" style="margin-top:6px;">
-          <label class="label-sm">Rotate every:</label>
-          <input type="number" id="rotationThreshold" min="10" max="500" value="50" class="input-xs" />
-          <span class="label-sm">leads</span>
-        </div>
-      </div>
-
-      <!-- Extra Settings -->
-      <div class="adv-group">
-        <div class="adv-group-title">Collection Settings</div>
-        <div class="settings-grid">
-          <div class="setting-item">
-            <label>Max per Search</label>
-            <input type="number" id="autoMaxPages" min="10" max="500" value="50" />
-          </div>
-          <div class="setting-item">
-            <label>Search Scroll</label>
-            <input type="number" id="searchScroll" min="5" max="100" value="25" />
-          </div>
-        </div>
-        <label class="toggle-row mini" style="margin-top:8px;">
-          <span class="toggle-switch">
-            <input type="checkbox" id="deepEnrich" />
-            <span class="toggle-slider"></span>
-          </span>
-          <span class="toggle-text"><strong>Deep Enrichment</strong><small>Visit websites for emails</small></span>
-        </label>
-      </div>
-    </div>
-  </div>
 
   <!-- ===== Status Bar ===== -->
   <footer class="status-bar">
     <span id="status">Ready.</span>
-    <span class="version">v4.2.0</span>
+    <span class="version">v5.0.0</span>
   </footer>
 
   <script src="popup.js"></script>
