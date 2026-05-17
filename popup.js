@@ -73,7 +73,7 @@ async function loadSettings() {
     "autoScrape", "autoMaxPages", "fields",
     "profileWait", "targetLeads", "searchScroll",
     "randomDelay", "captchaDetect", "autoResume",
-    "savedKeywords", "savedLocations"
+    "savedKeywords", "savedLocations", "passiveOn"
   ]);
   $("autoScrape").checked = !!s.autoScrape;
   $("autoMaxPages").value = s.autoMaxPages || 50;
@@ -83,6 +83,7 @@ async function loadSettings() {
   $("randomDelay").checked = s.randomDelay !== false;
   $("captchaDetect").checked = s.captchaDetect !== false;
   $("autoResume").checked = s.autoResume !== false;
+  if ($("passiveOn")) $("passiveOn").checked = !!s.passiveOn;
 
   if (s.savedKeywords) $("searchInput").value = s.savedKeywords;
   if (s.savedLocations) $("locationInput").value = s.savedLocations;
@@ -395,6 +396,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (changes.accounts || changes.activeAccountIndex) renderAccounts();
   if (changes.captchaDetected) checkCaptchaCooldown();
+  if (changes.snapshots) refreshSnapshotCount();
 });
 
 // ===== MAIN: Start Profile Collection =====
@@ -462,6 +464,84 @@ $("autoResume").addEventListener("change", (e) => saveSetting("autoResume", e.ta
 ALL_FIELDS.forEach(f => {
   const el = $(`f_${f}`);
   if (el) el.addEventListener("change", saveFields);
+});
+
+// ===== SNAPSHOT STUDIO =====
+async function refreshSnapshotCount() {
+  const { snapshots = {} } = await chrome.storage.local.get(["snapshots"]);
+  const ids = Object.keys(snapshots);
+  $("snapshotCount").textContent = ids.length;
+  let totalKb = 0;
+  for (const id of ids) {
+    totalKb += (snapshots[id].html?.length || 0) / 1024;
+  }
+  $("snapshotKb").textContent = totalKb.toFixed(0);
+}
+
+$("captureBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  const onMaps = tab && /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(tab.url || "");
+  if (!onMaps) {
+    setStatus("Open Google Maps + search first.");
+    return;
+  }
+  setStatus("Capturing HTML snapshots...");
+  setStatusBadge("running");
+  try {
+    const r = await chrome.tabs.sendMessage(tab.id, { type: "CAPTURE_NOW" });
+    if (r && r.ok) {
+      setStatus(`Captured ${r.captured || 0} HTMLs. Now click Extract.`);
+    } else {
+      setStatus(r?.error || "Capture failed");
+      setStatusBadge("error");
+    }
+  } catch (e) {
+    setStatus("Reload Maps tab and try again.");
+    setStatusBadge("error");
+  }
+  refreshSnapshotCount();
+});
+
+$("extractBtn").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  if (!tab) { setStatus("No active tab."); return; }
+  setStatus("Extracting from cache (offline)...");
+  setStatusBadge("running");
+  try {
+    const r = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_FROM_CACHE" });
+    if (r && r.ok) {
+      setStatus(`Saved ${r.saved} leads from ${r.processed} snapshots.`);
+    } else {
+      setStatus(r?.error || "Extract failed");
+      setStatusBadge("error");
+    }
+  } catch (e) {
+    setStatus("Open any Maps tab first (extract runs in tab).");
+    setStatusBadge("error");
+  }
+  setStatusBadge("ready");
+  refreshCounts();
+  renderPreviewTable();
+  refreshSnapshotCount();
+});
+
+$("passiveOn").addEventListener("change", async (e) => {
+  const on = e.target.checked;
+  await chrome.storage.local.set({ passiveOn: on });
+  const tab = await getActiveTab();
+  if (tab) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: on ? "PASSIVE_START" : "PASSIVE_STOP" });
+    } catch (_) {}
+  }
+  setStatus(on ? "Passive capture ON. Just browse Maps." : "Passive capture OFF.");
+});
+
+$("clearSnapshots").addEventListener("click", async () => {
+  if (!confirm("Delete all cached HTML snapshots? Extracted leads will NOT be deleted.")) return;
+  await chrome.storage.local.set({ snapshots: {} });
+  refreshSnapshotCount();
+  setStatus("Cache cleared.");
 });
 
 // ===== Deep Enrich =====
@@ -570,3 +650,4 @@ checkResumeCampaign();
 renderAccounts();
 checkCaptchaCooldown();
 setupCollapsibles();
+refreshSnapshotCount();

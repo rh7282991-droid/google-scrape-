@@ -160,6 +160,54 @@
     <button id="scrapeNow" class="btn-block btn-primary btn-xl">
       <span class="ic">&#9654;</span> Start Profile Collection
     </button>
+    <small class="hint" style="display:block;margin-top:6px;text-align:center;color:#64748b;">
+      Runs Capture + Extract together
+    </small>
+  </div>
+
+  <!-- ===== SNAPSHOT STUDIO (Stealth Mode) ===== -->
+  <div class="card collapsible" id="snapshotStudio">
+    <div class="card-header" id="snapshotHeader">
+      <div class="card-header-left">
+        <span class="header-icon">&#128247;</span>
+        <span>Snapshot Studio <span style="color:#22c55e;font-size:10px;font-weight:700;">STEALTH</span></span>
+        <span class="badge-count" id="snapshotCount">0</span>
+      </div>
+      <span class="chevron">&#9650;</span>
+    </div>
+    <div class="card-body">
+      <small style="display:block;margin-bottom:10px;color:#64748b;line-height:1.5;">
+        <b>How it works:</b> "Capture" quickly saves HTML of each place (online).
+        Then "Extract" parses that HTML offline — no Google contact at all.
+        Or use "Passive" to auto-save HTML while you manually browse.
+      </small>
+
+      <div class="export-grid" style="margin-bottom:8px;">
+        <button id="captureBtn" class="btn-block btn-primary">
+          <span class="ic">&#128190;</span> Capture HTML
+        </button>
+        <button id="extractBtn" class="btn-block btn-secondary">
+          <span class="ic">&#128269;</span> Extract Offline
+        </button>
+      </div>
+
+      <label class="toggle-row mini" style="margin-top:10px;">
+        <span class="toggle-switch">
+          <input type="checkbox" id="passiveOn" />
+          <span class="toggle-slider"></span>
+        </span>
+        <span class="toggle-text">
+          <strong>Passive Capture</strong>
+          <small>Auto-save HTML while you browse Maps (most stealthy)</small>
+        </span>
+      </label>
+
+      <div class="inline-row" style="margin-top:10px;">
+        <button id="clearSnapshots" class="btn-mini btn-danger" style="flex:1;">
+          Clear Cache (<span id="snapshotKb">0</span> KB)
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- ===== Live Preview (Feature 14) ===== -->
@@ -306,7 +354,7 @@
   <!-- ===== Status Bar ===== -->
   <footer class="status-bar">
     <span id="status">Ready.</span>
-    <span class="version">v6.0.0</span>
+    <span class="version">v7.0.0</span>
   </footer>
 
   <script src="popup.js"></script>
