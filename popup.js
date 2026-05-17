@@ -1,11 +1,11 @@
 // ============================================
-// Maps Lead Scraper Pro — popup controller
+// Maps Lead Scraper Pro v4.0 — 3-Step Flow Controller
 // ============================================
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
 
-// Maps-specific fields
+// Fields config
 const ALL_FIELDS = ["title", "phone", "email", "website", "address", "category",
   "rating", "reviewCount", "hours", "domain", "latitude", "url"];
 const DEFAULT_FIELDS = {
@@ -14,26 +14,26 @@ const DEFAULT_FIELDS = {
   hours: false, domain: false, latitude: false, url: false
 };
 
-// ===== Location DB =====
+// Location DB
 const LOCATION_NEIGHBORHOODS = {
-  "dhaka": ["Dhanmondi", "Gulshan", "Mirpur", "Uttara", "Banani", "Mohammadpur", "Bashundhara", "Tejgaon", "Motijheel", "Wari", "Badda", "Rampura", "Khilgaon"],
-  "chittagong": ["Agrabad", "Nasirabad", "Halishahar", "Patenga", "Kotwali", "GEC Circle", "Oxygen", "Khulshi"],
-  "sylhet": ["Zindabazar", "Amberkhana", "Uposhahar", "Shibganj", "Tilagarh"],
-  "rajshahi": ["Shaheb Bazar", "Sapura", "Kazla", "Uposhahar", "Talaimari"],
-  "khulna": ["Sonadanga", "Boyra", "Khalishpur", "Daulatpur", "Gollamari"],
-  "new york": ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island", "Harlem", "Williamsburg", "SoHo"],
-  "london": ["Westminster", "Camden", "Shoreditch", "Soho", "Brixton", "Hackney", "Kensington"],
-  "dubai": ["Downtown", "Deira", "Bur Dubai", "Jumeirah", "Marina", "Al Barsha", "Business Bay"],
-  "mumbai": ["Andheri", "Bandra", "Colaba", "Dadar", "Juhu", "Powai", "Worli", "Malad"],
-  "delhi": ["Connaught Place", "Karol Bagh", "Lajpat Nagar", "Hauz Khas", "Dwarka", "Rohini", "Saket"],
-  "kolkata": ["Salt Lake", "Park Street", "New Town", "Ballygunge", "Howrah", "Jadavpur"],
+  "dhaka": ["Dhanmondi", "Gulshan", "Mirpur", "Uttara", "Banani", "Mohammadpur", "Bashundhara", "Tejgaon", "Motijheel"],
+  "chittagong": ["Agrabad", "Nasirabad", "Halishahar", "Patenga", "Kotwali", "GEC Circle"],
+  "sylhet": ["Zindabazar", "Amberkhana", "Uposhahar", "Shibganj"],
+  "rajshahi": ["Shaheb Bazar", "Sapura", "Kazla", "Uposhahar"],
+  "khulna": ["Sonadanga", "Boyra", "Khalishpur", "Daulatpur"],
+  "new york": ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island", "Harlem"],
+  "london": ["Westminster", "Camden", "Shoreditch", "Soho", "Brixton", "Hackney"],
+  "dubai": ["Downtown", "Deira", "Bur Dubai", "Jumeirah", "Marina", "Al Barsha"],
+  "mumbai": ["Andheri", "Bandra", "Colaba", "Dadar", "Juhu", "Powai"],
+  "delhi": ["Connaught Place", "Karol Bagh", "Lajpat Nagar", "Hauz Khas", "Dwarka"],
+  "kolkata": ["Salt Lake", "Park Street", "New Town", "Ballygunge", "Howrah"],
   "karachi": ["Clifton", "DHA", "Gulshan-e-Iqbal", "Saddar", "Korangi"],
   "lahore": ["Gulberg", "DHA", "Model Town", "Johar Town", "Liberty"],
-  "singapore": ["Orchard", "Marina Bay", "Bugis", "Chinatown", "Little India", "Sentosa"],
-  "bangkok": ["Sukhumvit", "Silom", "Chatuchak", "Thonglor", "Pratunam", "Siam"],
-  "toronto": ["Downtown", "Scarborough", "North York", "Etobicoke", "Mississauga"],
-  "los angeles": ["Hollywood", "Santa Monica", "Beverly Hills", "Downtown LA", "Venice"],
-  "chicago": ["Loop", "Lincoln Park", "Wicker Park", "Hyde Park", "River North"],
+  "singapore": ["Orchard", "Marina Bay", "Bugis", "Chinatown", "Little India"],
+  "bangkok": ["Sukhumvit", "Silom", "Chatuchak", "Thonglor", "Pratunam"],
+  "toronto": ["Downtown", "Scarborough", "North York", "Etobicoke"],
+  "los angeles": ["Hollywood", "Santa Monica", "Beverly Hills", "Downtown LA"],
+  "chicago": ["Loop", "Lincoln Park", "Wicker Park", "Hyde Park"],
   "sydney": ["CBD", "Bondi", "Surry Hills", "Parramatta", "Manly"],
   "melbourne": ["CBD", "Fitzroy", "St Kilda", "South Yarra", "Richmond"]
 };
@@ -44,20 +44,9 @@ function setStatus(msg) { statusEl.textContent = msg; }
 function setStatusBadge(state) {
   const badge = $("statusBadge");
   badge.className = "status-pill " + state;
-  if (state === "running") badge.textContent = "Running";
-  else if (state === "paused") badge.textContent = "Paused";
-  else if (state === "error") badge.textContent = "Error";
-  else badge.textContent = "Ready";
-}
-
-async function refreshCounts() {
-  const { leads = [], todayLeadCount = 0, lifetimeQuota = 300 } =
-    await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
-  $("totalCount").textContent = leads.length;
-  $("totalLeadsHeader").textContent = leads.length;
-  $("previewCount").textContent = leads.length;
-  $("todayCount").textContent = todayLeadCount;
-  $("quotaLeft").textContent = Math.max(0, lifetimeQuota - leads.length);
+  badge.textContent = state === "running" ? "Running" :
+                      state === "paused" ? "Paused" :
+                      state === "error" ? "Error" : "Ready";
 }
 
 async function getActiveTab() {
@@ -65,14 +54,73 @@ async function getActiveTab() {
   return tab;
 }
 
-// ===== Settings =====
+// ===== Step Navigation =====
+let currentStep = 1;
+
+function showStep(step) {
+  currentStep = step;
+  $("stepSetup").style.display = step === 1 ? "block" : "none";
+  $("stepCollect").style.display = step === 2 ? "block" : "none";
+  $("stepExport").style.display = step === 3 ? "block" : "none";
+
+  // Update step indicator
+  document.querySelectorAll(".step-indicator .step").forEach(el => {
+    const s = parseInt(el.dataset.step);
+    el.classList.remove("active", "completed");
+    if (s === step) el.classList.add("active");
+    else if (s < step) el.classList.add("completed");
+  });
+
+  // Update step lines
+  const lines = document.querySelectorAll(".step-line");
+  lines.forEach((line, i) => {
+    line.classList.toggle("active", i < step - 1);
+  });
+
+  // Update counts when switching to collect/export
+  if (step === 2 || step === 3) refreshCounts();
+}
+
+// Step navigation buttons
+$("goToCollect").addEventListener("click", () => {
+  const keywords = $("searchInput").value.trim();
+  if (!keywords) {
+    setStatus("Please enter at least one keyword.");
+    $("searchInput").focus();
+    return;
+  }
+  showStep(2);
+  setStatus("Ready to collect.");
+});
+
+$("backToSetup").addEventListener("click", () => showStep(1));
+$("goToExport").addEventListener("click", () => showStep(3));
+$("backToCollect").addEventListener("click", () => showStep(2));
+
+// ===== Counts & Stats =====
+async function refreshCounts() {
+  const { leads = [], todayLeadCount = 0 } =
+    await chrome.storage.local.get(["leads", "todayLeadCount"]);
+  const total = leads.length;
+  const target = parseInt($("targetLeads").value) || 100;
+
+  $("totalLeadsHeader").textContent = total;
+  $("collectTotal").textContent = total;
+  $("collectTarget").textContent = target;
+  $("collectToday").textContent = todayLeadCount;
+  $("previewCount").textContent = total;
+  $("exportTotal").textContent = total;
+}
+
+// ===== Settings Load/Save =====
 async function loadSettings() {
   const s = await chrome.storage.local.get([
     "autoScrape", "deepEnrich", "autoMaxPages", "fields",
     "profileWait", "targetLeads", "searchScroll",
     "randomDelay", "captchaDetect", "autoResume",
-    "savedKeywords", "savedLocations"
+    "savedKeywords", "savedLocations", "webhookUrl", "webhookEnabled"
   ]);
+
   $("autoScrape").checked = !!s.autoScrape;
   $("deepEnrich").checked = !!s.deepEnrich;
   $("autoMaxPages").value = s.autoMaxPages || 50;
@@ -82,11 +130,17 @@ async function loadSettings() {
   $("randomDelay").checked = s.randomDelay !== false;
   $("captchaDetect").checked = s.captchaDetect !== false;
   $("autoResume").checked = s.autoResume !== false;
+  $("webhookEnabled").checked = !!s.webhookEnabled;
+  if (s.webhookUrl) $("webhookUrl").value = s.webhookUrl;
 
   if (s.savedKeywords) $("searchInput").value = s.savedKeywords;
   if (s.savedLocations) $("locationInput").value = s.savedLocations;
   updateInputCounts();
 
+  // Webhook body visibility
+  $("webhookBody").style.display = s.webhookEnabled ? "block" : "none";
+
+  // Fields
   const fields = s.fields || DEFAULT_FIELDS;
   for (const f of ALL_FIELDS) {
     const el = $(`f_${f}`);
@@ -111,127 +165,63 @@ function updateInputCounts() {
   $("locationCount").textContent = `${lc.length} location${lc.length !== 1 ? "s" : ""}`;
 }
 
-// ===== Paste Buttons =====
-$("pasteKeywords").addEventListener("click", async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) {
-      $("searchInput").value = text;
-      updateInputCounts();
-      saveSetting("savedKeywords", text);
-      setStatus("Keywords pasted from clipboard.");
-    }
-  } catch (e) { setStatus("Clipboard access denied."); }
-});
-
-$("pasteLocations").addEventListener("click", async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) {
-      $("locationInput").value = text;
-      updateInputCounts();
-      saveSetting("savedLocations", text);
-      expandLocationFromTextarea();
-      setStatus("Locations pasted from clipboard.");
-    }
-  } catch (e) { setStatus("Clipboard access denied."); }
-});
-
+// ===== Input Listeners =====
 $("searchInput").addEventListener("input", () => {
   updateInputCounts();
   saveSetting("savedKeywords", $("searchInput").value);
 });
+
 $("locationInput").addEventListener("input", () => {
   updateInputCounts();
   saveSetting("savedLocations", $("locationInput").value);
+  clearTimeout(locationTimeout);
+  locationTimeout = setTimeout(expandLocationFromTextarea, 350);
 });
 
-$("clearCampaign").addEventListener("click", async () => {
-  if (!confirm("Clear keywords and locations?")) return;
-  $("searchInput").value = "";
-  $("locationInput").value = "";
-  $("locationChips").innerHTML = "";
-  updateInputCounts();
-  await chrome.storage.local.remove(["savedKeywords", "savedLocations"]);
-  setStatus("Campaign inputs cleared.");
+// ===== Fields Toggle =====
+$("fieldsToggle").addEventListener("click", () => {
+  const body = $("fieldsBody");
+  const isOpen = body.style.display !== "none";
+  body.style.display = isOpen ? "none" : "block";
+  $("fieldsToggle").classList.toggle("open", !isOpen);
 });
 
-// ===== Live Preview Table =====
-async function renderPreviewTable() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  const tbody = $("previewBody");
-  if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
-    return;
-  }
-  const last10 = leads.slice(-10).reverse();
-  tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "\u2014").slice(0, 22);
-    const phone = (lead.phone || "\u2014").slice(0, 14);
-    const addr = (lead.address || "\u2014").slice(0, 20);
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
-  }).join("");
-}
-
-// ===== Collapsible Cards =====
-function setupCollapsibles() {
-  document.querySelectorAll(".card.collapsible .card-header").forEach(header => {
-    header.addEventListener("click", () => {
-      header.parentElement.classList.toggle("collapsed");
-    });
-  });
-}
-
-// ===== Search Suggestions =====
-let suggestTimeout = null;
-$("searchInput").addEventListener("input", (e) => {
-  clearTimeout(suggestTimeout);
-  const lines = e.target.value.split("\n");
-  const lastLine = lines[lines.length - 1].trim();
-  if (lastLine.length < 2) { hideSuggest(); return; }
-  suggestTimeout = setTimeout(() => fetchSuggestions(lastLine), 350);
+// ===== Webhook Toggle =====
+$("webhookEnabled").addEventListener("change", (e) => {
+  const enabled = e.target.checked;
+  $("webhookBody").style.display = enabled ? "block" : "none";
+  saveSetting("webhookEnabled", enabled);
 });
 
-async function fetchSuggestions(query) {
+$("webhookUrl").addEventListener("change", (e) => {
+  saveSetting("webhookUrl", e.target.value.trim());
+});
+
+$("testWebhook").addEventListener("click", async () => {
+  const url = $("webhookUrl").value.trim();
+  if (!url) { setStatus("Enter a webhook URL first."); return; }
   try {
-    const res = await chrome.runtime.sendMessage({ type: "FETCH_SUGGESTIONS", query });
-    if (res && res.suggestions && res.suggestions.length) {
-      showSuggest(res.suggestions, (val) => {
-        const ta = $("searchInput");
-        const lines = ta.value.split("\n");
-        lines[lines.length - 1] = val;
-        ta.value = lines.join("\n");
-        updateInputCounts();
-        saveSetting("savedKeywords", ta.value);
-        hideSuggest();
-      });
-    } else hideSuggest();
-  } catch (e) { hideSuggest(); }
-}
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ test: true, source: "Maps Scraper Pro", timestamp: Date.now() })
+    });
+    setStatus(res.ok ? "Webhook test successful!" : `Webhook failed: ${res.status}`);
+  } catch (e) {
+    setStatus("Webhook error: " + e.message);
+  }
+});
 
-function showSuggest(items, onClick) {
-  const wrap = $("suggestWrap");
-  const list = $("suggestList");
-  wrap.style.display = "block";
-  list.innerHTML = items.map(item => `<li>${item}</li>`).join("");
-  list.querySelectorAll("li").forEach((li, i) => {
-    li.addEventListener("click", () => onClick(items[i]));
-  });
-}
-function hideSuggest() {
-  $("suggestWrap").style.display = "none";
-  $("suggestList").innerHTML = "";
-}
-document.addEventListener("click", (e) => {
-  if (!e.target.closest(".suggest-overlay") && !e.target.matches("textarea")) hideSuggest();
+// ===== Advanced Toggle =====
+$("advancedToggle").addEventListener("click", () => {
+  const body = $("advancedBody");
+  const isOpen = body.style.display !== "none";
+  body.style.display = isOpen ? "none" : "block";
+  $("advancedToggle").textContent = isOpen ? "\u2699 Advanced Settings" : "\u2699 Hide Advanced";
 });
 
 // ===== Location Auto-Expand =====
 let locationTimeout = null;
-$("locationInput").addEventListener("input", () => {
-  clearTimeout(locationTimeout);
-  locationTimeout = setTimeout(expandLocationFromTextarea, 350);
-});
 
 function expandLocationFromTextarea() {
   const lines = $("locationInput").value.trim().toLowerCase().split("\n").map(l => l.trim()).filter(Boolean);
@@ -255,7 +245,7 @@ function findNeighborhoods(query) {
 
 function showLocationChips(items) {
   const container = $("locationChips");
-  container.innerHTML = items.slice(0, 12).map(item =>
+  container.innerHTML = items.slice(0, 10).map(item =>
     `<span class="loc-chip" data-area="${item.area}" data-city="${item.city}">${item.area} <span class="remove">\u00d7</span></span>`
   ).join("");
   container.querySelectorAll(".loc-chip").forEach(chip => {
@@ -265,9 +255,8 @@ function showLocationChips(items) {
       } else {
         const ta = $("locationInput");
         const newLoc = chip.dataset.area + ", " + chip.dataset.city;
-        const current = ta.value.trim();
-        if (!current.includes(newLoc)) {
-          ta.value = current ? current + "\n" + newLoc : newLoc;
+        if (!ta.value.includes(newLoc)) {
+          ta.value = ta.value.trim() ? ta.value.trim() + "\n" + newLoc : newLoc;
           updateInputCounts();
           saveSetting("savedLocations", ta.value);
         }
@@ -276,38 +265,115 @@ function showLocationChips(items) {
   });
 }
 
-// ===== Resume Banner =====
-async function checkResumeCampaign() {
-  const { campaignState, autoResume } = await chrome.storage.local.get(["campaignState", "autoResume"]);
-  if (autoResume === false) return;
-  if (campaignState && campaignState.isActive && !campaignState.completed) {
-    $("resumeBanner").style.display = "flex";
-    $("resumeInfo").textContent = `${campaignState.leadsCollected || 0} leads, query: "${(campaignState.query || '').slice(0, 30)}"`;
+// ===== MAIN: Start Button (does everything) =====
+$("scrapeNow").addEventListener("click", async () => {
+  const tab = await getActiveTab();
+  const onMaps = tab && /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(tab.url || "");
+
+  const keywords = $("searchInput").value.trim().split("\n").map(k => k.trim()).filter(Boolean);
+  const locations = $("locationInput").value.trim().split("\n").map(l => l.trim()).filter(Boolean);
+
+  if (!keywords.length) {
+    setStatus("Add keywords in Setup first.");
+    showStep(1);
+    $("searchInput").focus();
+    return;
   }
+
+  if (!onMaps) {
+    // Navigate to Maps with first keyword + location
+    const query = keywords[0] + (locations.length ? " " + locations[0] : "");
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
+
+    await chrome.storage.local.set({ autoScrape: true });
+    $("autoScrape").checked = true;
+
+    if (tab) chrome.tabs.update(tab.id, { url });
+    else chrome.tabs.create({ url });
+
+    setStatus(`Opening Maps: "${query}"...`);
+    setStatusBadge("running");
+    showRunningUI();
+    return;
+  }
+
+  // Already on Maps — scrape current page
+  setStatus("Capturing leads...");
+  setStatusBadge("running");
+  showRunningUI();
+
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
+    if (res && res.ok) {
+      setStatus(`Captured ${res.saved || 0} new leads!`);
+      refreshCounts();
+      renderPreviewTable();
+    } else if (res && res.captcha) {
+      setStatus("CAPTCHA detected! Cooldown started.");
+      setStatusBadge("paused");
+    } else {
+      setStatus(res?.error || "Failed. Reload Maps page.");
+      setStatusBadge("error");
+    }
+  } catch (e) {
+    setStatus("Cannot reach page. Reload Maps tab.");
+    setStatusBadge("error");
+  }
+  hideRunningUI();
+  refreshCounts();
+  renderPreviewTable();
+});
+
+function showRunningUI() {
+  $("scrapeNow").style.display = "none";
+  $("stopBtn").style.display = "flex";
+  $("progressBox").style.display = "block";
 }
 
-$("resumeYes").addEventListener("click", async () => {
-  const { campaignState } = await chrome.storage.local.get(["campaignState"]);
-  if (!campaignState) return;
-  await chrome.storage.local.set({ autoScrape: true });
+function hideRunningUI() {
+  $("scrapeNow").style.display = "flex";
+  $("stopBtn").style.display = "none";
+}
+
+// ===== Stop Button =====
+$("stopBtn").addEventListener("click", async () => {
   const tab = await getActiveTab();
-  const url = campaignState.lastUrl || `https://www.google.com/maps/search/${encodeURIComponent(campaignState.query || "")}`;
-  if (tab) chrome.tabs.update(tab.id, { url });
-  else chrome.tabs.create({ url });
-  setStatus("Resuming campaign...");
+  if (tab) {
+    try { await chrome.tabs.sendMessage(tab.id, { type: "STOP_SCRAPE" }); } catch (_) {}
+  }
+  await chrome.storage.local.set({ autoScrape: false, progress: { isRunning: false } });
+  $("autoScrape").checked = false;
+  $("progressBox").style.display = "none";
+  hideRunningUI();
+  setStatusBadge("ready");
+  setStatus("Stopped.");
+});
+
+// ===== Progress Rendering =====
+function renderProgress(p) {
+  if (!p || !p.isRunning) {
+    $("progressBox").style.display = "none";
+    hideRunningUI();
+    setStatusBadge("ready");
+    return;
+  }
+  $("progressBox").style.display = "block";
+  showRunningUI();
   setStatusBadge("running");
-  $("resumeBanner").style.display = "none";
-  loadSettings();
-});
+  $("progressTitle").textContent = p.title || "Capturing leads...";
+  $("progPage").textContent = p.currentPage || 0;
+  $("progPageTotal").textContent = p.totalPages || "?";
+  $("progFound").textContent = p.totalFound || 0;
+  $("progCurrent").textContent = p.currentItem || "";
+  const pct = p.totalPages > 0
+    ? Math.min(100, Math.round((p.currentPage / p.totalPages) * 100))
+    : (p.percent || 0);
+  $("progressFill").style.width = pct + "%";
+}
 
-$("resumeNo").addEventListener("click", async () => {
-  $("resumeBanner").style.display = "none";
-  await chrome.storage.local.remove(["campaignState"]);
-  setStatus("Campaign dismissed.");
-});
-
-// ===== CAPTCHA Banner =====
+// ===== CAPTCHA Timer =====
 let captchaTimer = null;
+
 async function checkCaptchaCooldown() {
   const { captchaDetected } = await chrome.storage.local.get(["captchaDetected"]);
   if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
@@ -316,7 +382,6 @@ async function checkCaptchaCooldown() {
     startCaptchaTimer(captchaDetected.cooldownUntil);
   } else {
     $("captchaBanner").style.display = "none";
-    if (captchaTimer) clearInterval(captchaTimer);
   }
 }
 
@@ -338,160 +403,36 @@ function startCaptchaTimer(until) {
   captchaTimer = setInterval(update, 1000);
 }
 
-$("dismissCaptcha").addEventListener("click", async () => {
-  await chrome.storage.local.remove(["captchaDetected"]);
-  $("captchaBanner").style.display = "none";
-  setStatusBadge("ready");
-  if (captchaTimer) clearInterval(captchaTimer);
-});
-
-// ===== Progress UI =====
-function renderProgress(p) {
-  const box = $("progressBox");
-  if (!p || !p.isRunning) {
-    box.style.display = "none";
-    setStatusBadge("ready");
+// ===== Live Preview Table =====
+async function renderPreviewTable() {
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  const tbody = $("previewBody");
+  if (!leads.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
     return;
   }
-  box.style.display = "block";
-  setStatusBadge("running");
-  $("progressTitle").textContent = p.title || "Working...";
-  $("progPage").textContent = p.currentPage || 0;
-  $("progPageTotal").textContent = p.totalPages || "?";
-  $("progFound").textContent = p.totalFound || 0;
-  $("progCurrent").textContent = p.currentItem || "";
-  const pct = p.totalPages > 0
-    ? Math.min(100, Math.round((p.currentPage / p.totalPages) * 100))
-    : (p.percent || 0);
-  $("progressFill").style.width = pct + "%";
+  const last10 = leads.slice(-10).reverse();
+  tbody.innerHTML = last10.map((lead, i) => {
+    const name = (lead.title || "\u2014").slice(0, 20);
+    const phone = (lead.phone || "\u2014").slice(0, 14);
+    const addr = (lead.address || "\u2014").slice(0, 18);
+    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
+  }).join("");
 }
-
-async function pollProgress() {
-  const { progress } = await chrome.storage.local.get(["progress"]);
-  renderProgress(progress);
-  refreshCounts();
-}
-
-$("stopBtn").addEventListener("click", async () => {
-  const tab = await getActiveTab();
-  if (tab) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: "STOP_SCRAPE" }); } catch (_) {}
-  }
-  await chrome.storage.local.set({ autoScrape: false, progress: { isRunning: false } });
-  $("autoScrape").checked = false;
-  $("progressBox").style.display = "none";
-  setStatusBadge("ready");
-  setStatus("Stopped by user.");
-});
-
-// ===== Storage change listener =====
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local") return;
-  if (changes.progress) renderProgress(changes.progress.newValue);
-  if (changes.leads) {
-    refreshCounts();
-    renderPreviewTable();
-  }
-  if (changes.accounts || changes.activeAccountIndex) renderAccounts();
-  if (changes.captchaDetected) checkCaptchaCooldown();
-});
-
-// ===== MAIN: Start Profile Collection =====
-$("scrapeNow").addEventListener("click", async () => {
-  const tab = await getActiveTab();
-  const onMaps = tab && /^https?:\/\/(www\.)?(google\.com\/maps|maps\.google\.com)/.test(tab.url || "");
-
-  const keywords = $("searchInput").value.trim().split("\n").map(k => k.trim()).filter(Boolean);
-  const locations = $("locationInput").value.trim().split("\n").map(l => l.trim()).filter(Boolean);
-
-  if (!onMaps) {
-    // Build Maps search URL and navigate
-    if (!keywords.length) {
-      setStatus("Please enter at least one keyword.");
-      $("searchInput").focus();
-      return;
-    }
-    const query = keywords[0] + (locations.length ? " " + locations[0] : "");
-    const url = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
-
-    // Auto-enable auto-scrape so it kicks in after Maps loads
-    await chrome.storage.local.set({ autoScrape: true });
-    $("autoScrape").checked = true;
-
-    if (tab) chrome.tabs.update(tab.id, { url });
-    else chrome.tabs.create({ url });
-
-    setStatus(`Opening Google Maps: "${query}"...`);
-    setStatusBadge("running");
-    return;
-  }
-
-  // Already on Maps — start scraping the visible results
-  setStatus("Starting Maps scrape on current page...");
-  setStatusBadge("running");
-  try {
-    const res = await chrome.tabs.sendMessage(tab.id, { type: "SCRAPE_NOW" });
-    if (res && res.ok) {
-      setStatus(`Saved ${res.saved || 0} new leads.`);
-    } else if (res && res.captcha) {
-      setStatus("CAPTCHA detected! Cooldown started.");
-      setStatusBadge("paused");
-    } else {
-      setStatus(res?.error || "Failed to scrape. Reload Maps.");
-      setStatusBadge("error");
-    }
-  } catch (e) {
-    setStatus("Could not reach page. Reload the Maps tab.");
-    setStatusBadge("error");
-  }
-  refreshCounts();
-  renderPreviewTable();
-});
-
-// ===== Settings listeners =====
-$("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
-$("deepEnrich").addEventListener("change", (e) => saveSetting("deepEnrich", e.target.checked));
-$("autoMaxPages").addEventListener("change", (e) => saveSetting("autoMaxPages", Number(e.target.value) || 50));
-$("profileWait").addEventListener("change", (e) => saveSetting("profileWait", Number(e.target.value)));
-$("targetLeads").addEventListener("change", (e) => saveSetting("targetLeads", Number(e.target.value) || 100));
-$("searchScroll").addEventListener("change", (e) => saveSetting("searchScroll", Number(e.target.value) || 25));
-$("randomDelay").addEventListener("change", (e) => saveSetting("randomDelay", e.target.checked));
-$("captchaDetect").addEventListener("change", (e) => saveSetting("captchaDetect", e.target.checked));
-$("autoResume").addEventListener("change", (e) => saveSetting("autoResume", e.target.checked));
-
-ALL_FIELDS.forEach(f => {
-  const el = $(`f_${f}`);
-  if (el) el.addEventListener("change", saveFields);
-});
-
-// ===== Deep Enrich =====
-$("runDeep").addEventListener("click", async () => {
-  setStatus("Starting deep enrichment...");
-  setStatusBadge("running");
-  const res = await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" });
-  if (res && res.ok) {
-    setStatus(`Done. Updated ${res.updated} leads.`);
-  } else {
-    setStatus(`Failed: ${res?.error || "unknown"}`);
-  }
-  setStatusBadge("ready");
-  refreshCounts();
-  renderPreviewTable();
-});
 
 // ===== Export =====
 $("exportCsv").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "EXPORT_CSV" });
-  setStatus(res && res.ok ? "CSV exported to Downloads." : "Nothing to export.");
+  setStatus(res && res.ok ? "CSV downloaded!" : "Nothing to export.");
 });
 
 $("exportJson").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "EXPORT_JSON" });
-  setStatus(res && res.ok ? "JSON exported to Downloads." : "Nothing to export.");
+  setStatus(res && res.ok ? "JSON downloaded!" : "Nothing to export.");
 });
 
 $("clear").addEventListener("click", async () => {
-  if (!confirm("Delete all saved leads? This cannot be undone.")) return;
+  if (!confirm("Delete all leads? This cannot be undone.")) return;
   await chrome.storage.local.set({ leads: [], todayLeadCount: 0 });
   await chrome.storage.local.remove(["campaignState"]);
   setStatus("All leads cleared.");
@@ -506,18 +447,10 @@ async function renderAccounts() {
   $("rotationThreshold").value = accountRotationThreshold;
 
   const list = $("accountList");
-  const badge = $("activeAccountBadge");
-
   if (!accounts.length) {
-    list.innerHTML = '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:8px;">No accounts added.</div>';
-    $("accountInfo").innerHTML = `<small>Add Google accounts to auto-rotate every ${accountRotationThreshold} leads.</small>`;
-    badge.textContent = "None";
+    list.innerHTML = '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:6px;">No accounts added.</div>';
     return;
   }
-
-  const active = accounts[activeAccountIndex];
-  badge.textContent = active ? active.label.split("@")[0].slice(0, 12) : "None";
-  $("accountInfo").innerHTML = `<small>Active: <b>${active?.label || "\u2014"}</b> &middot; ${active?.leadsCollected || 0}/${accountRotationThreshold} leads</small>`;
 
   list.innerHTML = accounts.map((acc, i) => {
     const isActive = i === activeAccountIndex;
@@ -546,8 +479,6 @@ $("addAccountBtn").addEventListener("click", async () => {
     $("newAccountLabel").value = "";
     renderAccounts();
     setStatus(`Account "${label}" added.`);
-  } else {
-    setStatus(`Failed: ${res?.error || "unknown"}`);
   }
 });
 
@@ -558,15 +489,71 @@ $("newAccountLabel").addEventListener("keydown", (e) => {
 $("rotationThreshold").addEventListener("change", async (e) => {
   const val = Math.max(10, Math.min(500, Number(e.target.value) || 50));
   await chrome.storage.local.set({ accountRotationThreshold: val });
-  renderAccounts();
+});
+
+// ===== Settings Listeners =====
+$("autoScrape").addEventListener("change", (e) => saveSetting("autoScrape", e.target.checked));
+$("deepEnrich").addEventListener("change", (e) => saveSetting("deepEnrich", e.target.checked));
+$("autoMaxPages").addEventListener("change", (e) => saveSetting("autoMaxPages", Number(e.target.value) || 50));
+$("profileWait").addEventListener("change", (e) => saveSetting("profileWait", Number(e.target.value)));
+$("targetLeads").addEventListener("change", (e) => {
+  saveSetting("targetLeads", Number(e.target.value) || 100);
+  refreshCounts();
+});
+$("searchScroll").addEventListener("change", (e) => saveSetting("searchScroll", Number(e.target.value) || 25));
+$("randomDelay").addEventListener("change", (e) => saveSetting("randomDelay", e.target.checked));
+$("captchaDetect").addEventListener("change", (e) => saveSetting("captchaDetect", e.target.checked));
+$("autoResume").addEventListener("change", (e) => saveSetting("autoResume", e.target.checked));
+
+ALL_FIELDS.forEach(f => {
+  const el = $(`f_${f}`);
+  if (el) el.addEventListener("change", saveFields);
+});
+
+// ===== Storage Change Listener =====
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.progress) renderProgress(changes.progress.newValue);
+  if (changes.leads) {
+    refreshCounts();
+    renderPreviewTable();
+  }
+  if (changes.accounts || changes.activeAccountIndex) renderAccounts();
+  if (changes.captchaDetected) checkCaptchaCooldown();
+});
+
+// ===== Auto-send to Webhook =====
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local" || !changes.leads) return;
+  const { webhookEnabled, webhookUrl } = await chrome.storage.local.get(["webhookEnabled", "webhookUrl"]);
+  if (!webhookEnabled || !webhookUrl) return;
+
+  const newLeads = changes.leads.newValue || [];
+  const oldLeads = changes.leads.oldValue || [];
+  if (newLeads.length <= oldLeads.length) return;
+
+  const fresh = newLeads.slice(oldLeads.length);
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leads: fresh, total: newLeads.length, timestamp: Date.now() })
+    });
+  } catch (_) {}
 });
 
 // ===== Init =====
 loadSettings();
 refreshCounts();
-pollProgress();
 renderPreviewTable();
-checkResumeCampaign();
 renderAccounts();
 checkCaptchaCooldown();
-setupCollapsibles();
+
+// Check if scraping is already running
+(async () => {
+  const { progress } = await chrome.storage.local.get(["progress"]);
+  if (progress && progress.isRunning) {
+    showStep(2);
+    renderProgress(progress);
+  }
+})();

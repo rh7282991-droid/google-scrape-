@@ -7,311 +7,315 @@
 </head>
 <body>
 
-  <!-- ===== Header Card ===== -->
+  <!-- ===== Header ===== -->
   <div class="header-card">
     <div class="header-top">
       <img src="assets/logo.svg" alt="logo" class="logo" />
       <div class="header-text">
         <h1>Maps Scraper <span class="pro-badge">PRO</span></h1>
-        <p class="subtitle">Google Maps lead collector <span class="dot-sep">&middot;</span> <span id="totalLeadsHeader">0</span> Leads</p>
+        <p class="subtitle"><span id="totalLeadsHeader">0</span> Leads collected</p>
       </div>
       <span id="statusBadge" class="status-pill ready">Ready</span>
     </div>
-
-    <div class="stats-row">
-      <div class="stat">
-        <div class="stat-label">Today</div>
-        <div class="stat-value" id="todayCount">0</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Total</div>
-        <div class="stat-value" id="totalCount">0</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Quota Left</div>
-        <div class="stat-value" id="quotaLeft">300</div>
-      </div>
-    </div>
   </div>
 
-  <!-- ===== Live Progress (hidden by default) ===== -->
-  <section class="progress-box" id="progressBox" style="display:none;">
-    <div class="progress-header">
-      <span class="dot"></span>
-      <span id="progressTitle">Working...</span>
-      <button id="stopBtn" class="btn-mini btn-danger">Stop</button>
-    </div>
-    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    <div class="progress-meta">
-      <span>Profile <b id="progPage">0</b>/<b id="progPageTotal">0</b></span>
-      <span><b id="progFound">0</b> leads</span>
-    </div>
-    <div class="progress-current" id="progCurrent"></div>
-  </section>
-
-  <!-- ===== Resume Banner (Feature 17) ===== -->
-  <section class="resume-banner" id="resumeBanner" style="display:none;">
-    <div class="resume-content">
-      <span class="resume-icon">&#9889;</span>
-      <div class="resume-text">
-        <strong>Resume previous campaign?</strong>
-        <small id="resumeInfo">0 leads collected, page 0/0</small>
-      </div>
-    </div>
-    <div class="resume-actions">
-      <button id="resumeYes" class="btn-mini btn-primary">Resume</button>
-      <button id="resumeNo" class="btn-mini btn-ghost">Dismiss</button>
-    </div>
-  </section>
-
-  <!-- ===== CAPTCHA Banner (Feature 4) ===== -->
-  <section class="captcha-banner" id="captchaBanner" style="display:none;">
-    <span class="captcha-icon">&#9888;</span>
-    <div class="captcha-text">
-      <strong>Suspicious activity detected</strong>
-      <small>Cooldown: <span id="captchaTimer">30:00</span> remaining</small>
-    </div>
-    <button id="dismissCaptcha" class="btn-mini btn-ghost">OK</button>
-  </section>
-
-  <!-- ===== Main Card: Campaign Setup ===== -->
-  <div class="main-card">
-    <div class="card-title">
-      <span>Campaign Setup</span>
-      <button id="clearCampaign" class="btn-mini btn-ghost" title="Clear all inputs">Reset</button>
-    </div>
-
-    <!-- Business Keywords -->
-    <div class="form-group">
-      <label class="form-label">
-        Business Keywords
-        <span class="hint" id="keywordCount">0 keywords</span>
-      </label>
-      <textarea id="searchInput" rows="3" placeholder="restaurant&#10;dentist&#10;hotel"></textarea>
-      <div class="btn-row">
-        <button id="pasteKeywords" class="btn-block btn-blue">
-          <span class="ic">&#128203;</span> Paste Keywords
-        </button>
-      </div>
-    </div>
-
-    <!-- Locations -->
-    <div class="form-group">
-      <label class="form-label">
-        Locations
-        <span class="hint" id="locationCount">0 locations</span>
-      </label>
-      <textarea id="locationInput" rows="3" placeholder="dhaka&#10;gulshan&#10;mirpur"></textarea>
-      <div class="btn-row">
-        <button id="pasteLocations" class="btn-block btn-blue">
-          <span class="ic">&#128205;</span> Paste Locations
-        </button>
-      </div>
-      <div class="location-chips" id="locationChips"></div>
-    </div>
-
-    <!-- Suggestion dropdown -->
-    <div class="suggest-overlay" id="suggestWrap" style="display:none;">
-      <ul class="suggest-list" id="suggestList"></ul>
-    </div>
-
-    <!-- Settings Grid -->
-    <div class="settings-grid">
-      <div class="setting-item">
-        <label>Target Leads</label>
-        <input type="number" id="targetLeads" min="1" max="10000" value="100" />
-      </div>
-      <div class="setting-item">
-        <label>Max per Search</label>
-        <input type="number" id="autoMaxPages" min="10" max="500" value="50" />
-      </div>
-      <div class="setting-item">
-        <label>Profile Wait</label>
-        <select id="profileWait">
-          <option value="2">2 sec Fast</option>
-          <option value="5">5 sec Normal</option>
-          <option value="7" selected>7 sec Safer</option>
-          <option value="10">10 sec Slow</option>
-          <option value="15">15 sec Stealth</option>
-        </select>
-      </div>
-      <div class="setting-item">
-        <label>Search Scroll</label>
-        <input type="number" id="searchScroll" min="5" max="100" value="25" />
-      </div>
-    </div>
-
-    <!-- Toggle row -->
-    <div class="toggle-section">
-      <label class="toggle-row">
-        <span class="toggle-switch">
-          <input type="checkbox" id="autoScrape" />
-          <span class="toggle-slider"></span>
-        </span>
-        <span class="toggle-text">
-          <strong>Auto-scrape on Maps</strong>
-          <small>Automatically collect leads when Maps loads</small>
-        </span>
-      </label>
-
-      <label class="toggle-row">
-        <span class="toggle-switch">
-          <input type="checkbox" id="deepEnrich" />
-          <span class="toggle-slider"></span>
-        </span>
-        <span class="toggle-text">
-          <strong>Deep enrichment</strong>
-          <small>Visit each website for emails</small>
-        </span>
-      </label>
-    </div>
-
-    <!-- Big start button -->
-    <button id="scrapeNow" class="btn-block btn-primary btn-xl">
-      <span class="ic">&#9654;</span> Start Profile Collection
-    </button>
+  <!-- ===== Step Indicator ===== -->
+  <div class="step-indicator">
+    <div class="step active" data-step="1"><span class="step-num">1</span><span class="step-label">Setup</span></div>
+    <div class="step-line"></div>
+    <div class="step" data-step="2"><span class="step-num">2</span><span class="step-label">Collect</span></div>
+    <div class="step-line"></div>
+    <div class="step" data-step="3"><span class="step-num">3</span><span class="step-label">Export</span></div>
   </div>
 
-  <!-- ===== Live Preview (Feature 14) ===== -->
-  <div class="card collapsible" id="previewPanel">
-    <div class="card-header" id="previewHeader">
-      <div class="card-header-left">
-        <span class="header-icon">&#128190;</span>
-        <span>Live Preview</span>
-        <span class="badge-count" id="previewCount">0</span>
-      </div>
-      <span class="chevron" id="previewChevron">&#9650;</span>
-    </div>
-    <div class="card-body">
-      <div class="preview-table-wrap" id="previewTableWrap">
-        <table class="preview-table">
-          <thead><tr><th>#</th><th>Business</th><th>Phone</th><th>Address</th></tr></thead>
-          <tbody id="previewBody">
-            <tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
+  <!-- ===== STEP 1: SETUP ===== -->
+  <section class="step-panel" id="stepSetup">
+    <div class="panel-card">
+      <div class="panel-title">Campaign Setup</div>
 
-  <!-- ===== Fields to Extract (Maps-specific) ===== -->
-  <div class="card collapsible">
-    <div class="card-header" id="fieldsHeader">
-      <div class="card-header-left">
-        <span class="header-icon">&#9881;</span>
-        <span>Fields to Extract</span>
+      <!-- Keywords -->
+      <div class="form-group">
+        <label class="form-label">
+          Business Keywords
+          <span class="hint" id="keywordCount">0 keywords</span>
+        </label>
+        <textarea id="searchInput" rows="3" placeholder="restaurant&#10;dentist&#10;hotel"></textarea>
       </div>
-      <span class="chevron">&#9650;</span>
-    </div>
-    <div class="card-body">
-      <div class="fields-grid">
-        <label class="field-chip"><input type="checkbox" id="f_title" checked /><span>Business Name</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_phone" checked /><span>Phone</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_email" checked /><span>Email</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_website" checked /><span>Website</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_address" checked /><span>Address</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_category" checked /><span>Category</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_rating" checked /><span>Rating</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_reviewCount" checked /><span>Reviews</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_hours" /><span>Hours</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_latitude" /><span>Coordinates</span></label>
-        <label class="field-chip"><input type="checkbox" id="f_url" /><span>Maps URL</span></label>
-      </div>
-    </div>
-  </div>
 
-  <!-- ===== Account Rotation (Feature 5) ===== -->
-  <div class="card collapsible">
-    <div class="card-header" id="accountHeader">
-      <div class="card-header-left">
-        <span class="header-icon">&#128100;</span>
-        <span>Account Rotation</span>
-        <span class="badge-pill" id="activeAccountBadge">None</span>
+      <!-- Locations -->
+      <div class="form-group">
+        <label class="form-label">
+          Locations
+          <span class="hint" id="locationCount">0 locations</span>
+        </label>
+        <textarea id="locationInput" rows="3" placeholder="dhaka&#10;new york&#10;london"></textarea>
+        <div class="location-chips" id="locationChips"></div>
       </div>
-      <span class="chevron">&#9650;</span>
-    </div>
-    <div class="card-body">
-      <div class="account-info" id="accountInfo">
-        <small>Add Google accounts to auto-rotate every 50 leads.</small>
-      </div>
-      <div class="account-list" id="accountList"></div>
-      <div class="inline-row">
-        <input type="text" id="newAccountLabel" placeholder="account@gmail.com" class="input-sm" />
-        <button id="addAccountBtn" class="btn-mini btn-primary">Add</button>
-      </div>
-      <div class="inline-row" style="margin-top:8px;">
-        <label class="label-sm">Rotate every:</label>
-        <input type="number" id="rotationThreshold" min="10" max="500" value="50" class="input-xs" />
-        <span class="label-sm">leads</span>
-      </div>
-    </div>
-  </div>
 
-  <!-- ===== Anti-Detection ===== -->
-  <div class="card collapsible">
-    <div class="card-header" id="antiDetectHeader">
-      <div class="card-header-left">
-        <span class="header-icon">&#128737;</span>
-        <span>Anti-Detection</span>
+      <!-- Quick Settings -->
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label>Target Leads</label>
+          <input type="number" id="targetLeads" min="1" max="10000" value="100" />
+        </div>
+        <div class="setting-item">
+          <label>Speed</label>
+          <select id="profileWait">
+            <option value="2">Fast</option>
+            <option value="5">Normal</option>
+            <option value="7" selected>Safe</option>
+            <option value="10">Slow</option>
+            <option value="15">Stealth</option>
+          </select>
+        </div>
       </div>
-      <span class="chevron">&#9650;</span>
-    </div>
-    <div class="card-body">
-      <label class="toggle-row mini">
-        <span class="toggle-switch">
-          <input type="checkbox" id="randomDelay" checked />
-          <span class="toggle-slider"></span>
-        </span>
-        <span class="toggle-text"><strong>Random Delays</strong><small>Mimic human behavior</small></span>
-      </label>
-      <label class="toggle-row mini">
-        <span class="toggle-switch">
-          <input type="checkbox" id="captchaDetect" checked />
-          <span class="toggle-slider"></span>
-        </span>
-        <span class="toggle-text"><strong>CAPTCHA Detection</strong><small>30-min cooldown on detection</small></span>
-      </label>
-      <label class="toggle-row mini">
-        <span class="toggle-switch">
-          <input type="checkbox" id="autoResume" checked />
-          <span class="toggle-slider"></span>
-        </span>
-        <span class="toggle-text"><strong>Auto-resume</strong><small>Resume after browser restart</small></span>
-      </label>
-    </div>
-  </div>
 
-  <!-- ===== Export ===== -->
-  <div class="card">
-    <div class="card-header" style="cursor:default;">
-      <div class="card-header-left">
-        <span class="header-icon">&#128190;</span>
-        <span>Export Leads</span>
+      <!-- Passive Capture Toggle -->
+      <div class="toggle-section">
+        <label class="toggle-row">
+          <span class="toggle-switch">
+            <input type="checkbox" id="autoScrape" />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text">
+            <strong>Passive Capture</strong>
+            <small>Auto-collect when browsing Maps</small>
+          </span>
+        </label>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="export-grid">
-        <button id="exportCsv" class="btn-block btn-secondary">
-          <span class="ic">&#128196;</span> CSV
-        </button>
-        <button id="exportJson" class="btn-block btn-secondary">
-          <span class="ic">&#123;&#125;</span> JSON
-        </button>
+
+      <!-- Fields to Extract -->
+      <div class="fields-section">
+        <div class="fields-header" id="fieldsToggle">
+          <span>Fields to Extract</span>
+          <span class="chevron">&#9660;</span>
+        </div>
+        <div class="fields-body" id="fieldsBody" style="display:none;">
+          <div class="fields-grid">
+            <label class="field-chip"><input type="checkbox" id="f_title" checked /><span>Business Name</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_phone" checked /><span>Phone</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_email" checked /><span>Email</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_website" checked /><span>Website</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_address" checked /><span>Address</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_category" checked /><span>Category</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_rating" checked /><span>Rating</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_reviewCount" checked /><span>Reviews</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_hours" /><span>Hours</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_latitude" /><span>Coordinates</span></label>
+            <label class="field-chip"><input type="checkbox" id="f_url" /><span>Maps URL</span></label>
+          </div>
+        </div>
       </div>
-      <button id="runDeep" class="btn-block btn-secondary" style="margin-top:8px;">
-        <span class="ic">&#128269;</span> Deep-Enrich Websites
+
+      <!-- Next Button -->
+      <button id="goToCollect" class="btn-block btn-primary btn-xl">
+        Next: Start Collection &#8594;
       </button>
-      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:8px;">
+    </div>
+  </section>
+
+  <!-- ===== STEP 2: COLLECT ===== -->
+  <section class="step-panel" id="stepCollect" style="display:none;">
+    <div class="panel-card">
+      <div class="panel-title">Collect Leads</div>
+
+      <!-- Status Summary -->
+      <div class="collect-summary">
+        <div class="summary-stat">
+          <span class="summary-value" id="collectTotal">0</span>
+          <span class="summary-label">Collected</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-value" id="collectTarget">100</span>
+          <span class="summary-label">Target</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-value" id="collectToday">0</span>
+          <span class="summary-label">Today</span>
+        </div>
+      </div>
+
+      <!-- Progress (shown when running) -->
+      <div class="progress-box" id="progressBox" style="display:none;">
+        <div class="progress-header">
+          <span class="dot"></span>
+          <span id="progressTitle">Capturing leads...</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-meta">
+          <span>Profile <b id="progPage">0</b>/<b id="progPageTotal">0</b></span>
+          <span><b id="progFound">0</b> leads found</span>
+        </div>
+        <div class="progress-current" id="progCurrent"></div>
+      </div>
+
+      <!-- CAPTCHA Warning -->
+      <div class="captcha-banner" id="captchaBanner" style="display:none;">
+        <span class="captcha-icon">&#9888;</span>
+        <div class="captcha-text">
+          <strong>Cooldown active</strong>
+          <small>Resuming in <span id="captchaTimer">30:00</span></small>
+        </div>
+      </div>
+
+      <!-- Main Action Button -->
+      <button id="scrapeNow" class="btn-block btn-primary btn-xl">
+        <span class="ic">&#9654;</span> Start
+      </button>
+
+      <button id="stopBtn" class="btn-block btn-danger-ghost" style="display:none; margin-top:8px;">
+        <span class="ic">&#9632;</span> Stop
+      </button>
+
+      <!-- Live Preview -->
+      <div class="preview-section">
+        <div class="preview-header">
+          <span>Live Preview</span>
+          <span class="badge-count" id="previewCount">0</span>
+        </div>
+        <div class="preview-table-wrap" id="previewTableWrap">
+          <table class="preview-table">
+            <thead><tr><th>#</th><th>Business</th><th>Phone</th><th>Address</th></tr></thead>
+            <tbody id="previewBody">
+              <tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Navigation -->
+      <div class="step-nav">
+        <button id="backToSetup" class="btn-block btn-secondary">&#8592; Setup</button>
+        <button id="goToExport" class="btn-block btn-primary">Export &#8594;</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== STEP 3: EXPORT ===== -->
+  <section class="step-panel" id="stepExport" style="display:none;">
+    <div class="panel-card">
+      <div class="panel-title">Get Your Data</div>
+
+      <div class="export-summary">
+        <div class="export-count"><span id="exportTotal">0</span> leads ready</div>
+      </div>
+
+      <!-- Download -->
+      <button id="exportCsv" class="btn-block btn-primary btn-xl">
+        <span class="ic">&#128229;</span> Download CSV
+      </button>
+
+      <button id="exportJson" class="btn-block btn-secondary" style="margin-top:8px;">
+        <span class="ic">&#123;&#125;</span> Download JSON
+      </button>
+
+      <!-- Webhook -->
+      <div class="webhook-section">
+        <div class="webhook-header" id="webhookToggle">
+          <span>Webhook (auto-send)</span>
+          <span class="toggle-switch small">
+            <input type="checkbox" id="webhookEnabled" />
+            <span class="toggle-slider"></span>
+          </span>
+        </div>
+        <div class="webhook-body" id="webhookBody" style="display:none;">
+          <input type="text" id="webhookUrl" placeholder="https://your-webhook-url.com/endpoint" />
+          <button id="testWebhook" class="btn-mini btn-primary" style="margin-top:6px;">Test</button>
+        </div>
+      </div>
+
+      <!-- Clear -->
+      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:16px;">
         <span class="ic">&#128465;</span> Clear All Leads
       </button>
+
+      <!-- Navigation -->
+      <div class="step-nav">
+        <button id="backToCollect" class="btn-block btn-secondary">&#8592; Back</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Advanced (Hidden by default) ===== -->
+  <div class="advanced-section">
+    <button class="advanced-toggle" id="advancedToggle">
+      &#9881; Advanced Settings
+    </button>
+    <div class="advanced-body" id="advancedBody" style="display:none;">
+
+      <!-- Anti-Detection (auto-enabled) -->
+      <div class="adv-group">
+        <div class="adv-group-title">Anti-Detection</div>
+        <label class="toggle-row mini">
+          <span class="toggle-switch">
+            <input type="checkbox" id="randomDelay" checked />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text"><strong>Random Delays</strong></span>
+        </label>
+        <label class="toggle-row mini">
+          <span class="toggle-switch">
+            <input type="checkbox" id="captchaDetect" checked />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text"><strong>CAPTCHA Detection</strong></span>
+        </label>
+        <label class="toggle-row mini">
+          <span class="toggle-switch">
+            <input type="checkbox" id="autoResume" checked />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text"><strong>Auto-Resume</strong></span>
+        </label>
+      </div>
+
+      <!-- Account Rotation -->
+      <div class="adv-group">
+        <div class="adv-group-title">Account Rotation</div>
+        <div class="account-info" id="accountInfo">
+          <small>Add accounts to auto-rotate every 50 leads.</small>
+        </div>
+        <div class="account-list" id="accountList"></div>
+        <div class="inline-row">
+          <input type="text" id="newAccountLabel" placeholder="account@gmail.com" class="input-sm" />
+          <button id="addAccountBtn" class="btn-mini btn-primary">Add</button>
+        </div>
+        <div class="inline-row" style="margin-top:6px;">
+          <label class="label-sm">Rotate every:</label>
+          <input type="number" id="rotationThreshold" min="10" max="500" value="50" class="input-xs" />
+          <span class="label-sm">leads</span>
+        </div>
+      </div>
+
+      <!-- Extra Settings -->
+      <div class="adv-group">
+        <div class="adv-group-title">Collection Settings</div>
+        <div class="settings-grid">
+          <div class="setting-item">
+            <label>Max per Search</label>
+            <input type="number" id="autoMaxPages" min="10" max="500" value="50" />
+          </div>
+          <div class="setting-item">
+            <label>Search Scroll</label>
+            <input type="number" id="searchScroll" min="5" max="100" value="25" />
+          </div>
+        </div>
+        <label class="toggle-row mini" style="margin-top:8px;">
+          <span class="toggle-switch">
+            <input type="checkbox" id="deepEnrich" />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text"><strong>Deep Enrichment</strong><small>Visit websites for emails</small></span>
+        </label>
+      </div>
     </div>
   </div>
 
   <!-- ===== Status Bar ===== -->
   <footer class="status-bar">
     <span id="status">Ready.</span>
-    <span class="version">v3.5.0</span>
+    <span class="version">v4.0.0</span>
   </footer>
 
   <script src="popup.js"></script>
