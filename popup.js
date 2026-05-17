@@ -53,13 +53,12 @@ function setStatusBadge(state) {
 }
 
 async function refreshCounts() {
-  const { leads = [], todayLeadCount = 0, lifetimeQuota = 300 } =
-    await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
+  const { leads = [], todayLeadCount = 0, snapshots = {} } =
+    await chrome.storage.local.get(["leads", "todayLeadCount", "snapshots"]);
   $("totalCount").textContent = leads.length;
   $("totalLeadsHeader").textContent = leads.length;
-  $("previewCount").textContent = leads.length;
   $("todayCount").textContent = todayLeadCount;
-  $("quotaLeft").textContent = Math.max(0, lifetimeQuota - leads.length);
+  $("quotaLeft").textContent = Object.keys(snapshots).length;
 }
 
 async function getActiveTab() {
@@ -158,22 +157,8 @@ $("clearCampaign").addEventListener("click", async () => {
   setStatus("Campaign inputs cleared.");
 });
 
-// ===== Live Preview Table =====
-async function renderPreviewTable() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  const tbody = $("previewBody");
-  if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
-    return;
-  }
-  const last10 = leads.slice(-10).reverse();
-  tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "\u2014").slice(0, 22);
-    const phone = (lead.phone || "\u2014").slice(0, 14);
-    const addr = (lead.address || "\u2014").slice(0, 20);
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
-  }).join("");
-}
+// ===== Live Preview removed — unlimited mode =====
+async function renderPreviewTable() {} // no-op stub
 
 // ===== Collapsible Cards =====
 function setupCollapsibles() {
