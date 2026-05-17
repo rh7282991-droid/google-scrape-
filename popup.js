@@ -555,6 +555,60 @@ $("exportJson").addEventListener("click", async () => {
   setStatus(res && res.ok ? "JSON exported to Downloads." : "Nothing to export.");
 });
 
+// ===== Webhook / n8n =====
+// Load saved webhook URL on startup
+(async () => {
+  const { webhookUrl } = await chrome.storage.local.get(["webhookUrl"]);
+  if (webhookUrl && $("webhookUrl")) $("webhookUrl").value = webhookUrl;
+})();
+
+// Save webhook URL whenever user types
+if ($("webhookUrl")) {
+  $("webhookUrl").addEventListener("input", (e) => {
+    chrome.storage.local.set({ webhookUrl: e.target.value.trim() });
+  });
+}
+
+$("sendWebhook").addEventListener("click", async () => {
+  const url = ($("webhookUrl").value || "").trim();
+  if (!url) {
+    setStatus("Enter a webhook URL first.");
+    return;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    setStatus("Invalid URL. Must start with http:// or https://");
+    return;
+  }
+
+  const { leads = [] } = await chrome.storage.local.get(["leads"]);
+  if (!leads.length) {
+    setStatus("No leads to send. Capture & extract first.");
+    return;
+  }
+
+  setStatus(`Sending ${leads.length} leads to webhook...`);
+  setStatusBadge("running");
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(leads)
+    });
+
+    if (res.ok) {
+      setStatus(`Sent ${leads.length} leads to webhook. Status: ${res.status}`);
+      setStatusBadge("ready");
+    } else {
+      setStatus(`Webhook error: ${res.status} ${res.statusText}`);
+      setStatusBadge("error");
+    }
+  } catch (e) {
+    setStatus(`Webhook failed: ${e.message || "Network error"}`);
+    setStatusBadge("error");
+  }
+});
+
 $("clear").addEventListener("click", async () => {
   if (!confirm("Delete all saved leads? This cannot be undone.")) return;
   await chrome.storage.local.set({ leads: [], todayLeadCount: 0 });

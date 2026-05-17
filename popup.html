@@ -323,7 +323,18 @@
       <button id="runDeep" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#10b981,#059669);">
         Deep-Enrich Websites
       </button>
-      <button id="clear" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#1e293b,#334155);">
+
+      <!-- Webhook / n8n integration -->
+      <div style="margin-top:6px;padding:12px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;">
+        <label style="font-size:11px;font-weight:600;color:#475569;display:block;margin-bottom:6px;">Webhook URL (n8n / Zapier / Make)</label>
+        <input type="text" id="webhookUrl" placeholder="https://your-n8n.app/webhook/abc123" style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;box-sizing:border-box;margin-bottom:8px;" />
+        <button id="sendWebhook" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#f97316,#ea580c);">
+          Send to Webhook
+        </button>
+        <small style="display:block;margin-top:4px;color:#94a3b8;font-size:10px;text-align:center;">Sends all leads as JSON array to your webhook endpoint</small>
+      </div>
+
+      <button id="clear" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#1e293b,#334155);margin-top:4px;">
         Clear All Leads
       </button>
     </div>
