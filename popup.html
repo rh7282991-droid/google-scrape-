@@ -325,7 +325,7 @@
     </div>
   </div>
 
-  <!-- ===== Export ===== -->
+  <!-- ===== Export Leads ===== -->
   <div class="card">
     <div class="card-header" style="cursor:default;">
       <div class="card-header-left">
@@ -333,20 +333,18 @@
         <span>Export Leads</span>
       </div>
     </div>
-    <div class="card-body">
-      <div class="export-grid">
-        <button id="exportCsv" class="btn-block btn-secondary">
-          <span class="ic">&#128196;</span> CSV
-        </button>
-        <button id="exportJson" class="btn-block btn-secondary">
-          <span class="ic">&#123;&#125;</span> JSON
-        </button>
-      </div>
-      <button id="runDeep" class="btn-block btn-secondary" style="margin-top:8px;">
-        <span class="ic">&#128269;</span> Deep-Enrich Websites
+    <div class="card-body" style="display:flex;flex-direction:column;gap:10px;">
+      <button id="exportCsv" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+        Download Excel CSV
       </button>
-      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:8px;">
-        <span class="ic">&#128465;</span> Clear All Leads
+      <button id="exportJson" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#06b6d4,#3b82f6);">
+        Download JSON
+      </button>
+      <button id="runDeep" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#10b981,#059669);">
+        Deep-Enrich Websites
+      </button>
+      <button id="clear" style="width:100%;padding:14px 20px;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#1e293b,#334155);">
+        Clear All Leads
       </button>
     </div>
   </div>
