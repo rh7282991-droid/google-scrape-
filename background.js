@@ -9,20 +9,28 @@ function csvEscape(v) {
   return `"${s}"`;
 }
 
-function leadsToCsv(leads) {
-  const keys = new Set();
-  leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
-  // Maps + Social preferred order
-  const preferred = [
+function leadsToCsv(leads, fields) {
+  // Determine which fields to include in export
+  const ALL_POSSIBLE = [
     "title", "phone", "email", "website", "address", "category",
     "rating", "reviewCount", "hours", "domain",
     "facebook", "instagram", "twitter", "linkedin", "youtube",
     "tiktok", "whatsapp", "pinterest",
-    "latitude", "longitude", "plusCode", "url",
-    "allEmails", "allPhones", "scrapedAt"
+    "latitude", "longitude", "plusCode", "url"
   ];
-  const headers = preferred.filter(k => keys.has(k))
-    .concat([...keys].filter(k => !preferred.includes(k)));
+
+  const hasUserSelection = fields && Object.keys(fields).length > 0;
+  const selected = hasUserSelection
+    ? ALL_POSSIBLE.filter(f => !!fields[f])
+    : ALL_POSSIBLE;
+
+  // Only include columns that user selected AND have data in at least one lead
+  const keys = new Set();
+  leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
+  const headers = selected.filter(k => keys.has(k));
+
+  // Always include title even if not selected (for usability)
+  if (!headers.includes("title") && keys.has("title")) headers.unshift("title");
 
   const rows = [headers.map(csvEscape).join(",")];
   for (const l of leads) {
@@ -310,17 +318,40 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
       if (msg.type === "EXPORT_CSV") {
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
+        const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
         if (!leads.length) return sendResponse({ ok: false });
-        const csv = leadsToCsv(leads);
+        const csv = leadsToCsv(leads, fields);
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
         await downloadText(csv, `maps-leads-${stamp}.csv`, "text/csv");
         sendResponse({ ok: true });
       } else if (msg.type === "EXPORT_JSON") {
-        const { leads = [] } = await chrome.storage.local.get(["leads"]);
+        const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
         if (!leads.length) return sendResponse({ ok: false });
+
+        // Filter JSON to only include selected fields
+        const ALL_POSSIBLE = [
+          "title", "phone", "email", "website", "address", "category",
+          "rating", "reviewCount", "hours", "domain",
+          "facebook", "instagram", "twitter", "linkedin", "youtube",
+          "tiktok", "whatsapp", "pinterest",
+          "latitude", "longitude", "plusCode", "url"
+        ];
+        const hasUserSel = Object.keys(fields).length > 0;
+        const selected = hasUserSel
+          ? ALL_POSSIBLE.filter(f => !!fields[f])
+          : ALL_POSSIBLE;
+        if (!selected.includes("title")) selected.unshift("title");
+
+        const filteredLeads = leads.map(l => {
+          const out = {};
+          for (const k of selected) {
+            if (l[k] !== undefined && l[k] !== null && l[k] !== "") out[k] = l[k];
+          }
+          return out;
+        });
+
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        await downloadText(JSON.stringify(leads, null, 2), `maps-leads-${stamp}.json`, "application/json");
+        await downloadText(JSON.stringify(filteredLeads, null, 2), `maps-leads-${stamp}.json`, "application/json");
         sendResponse({ ok: true });
       } else if (msg.type === "DEEP_SCRAPE_ALL") {
         sendResponse(await deepScrapeAll());
@@ -417,7 +448,10 @@ chrome.runtime.onInstalled.addListener(async () => {
     await chrome.storage.local.set({
       fields: {
         title: true, phone: true, email: true, website: true,
-        address: true, category: true, rating: true, reviewCount: true
+        address: true, category: true, rating: true, reviewCount: true,
+        facebook: true, instagram: true, linkedin: true,
+        twitter: false, youtube: false, tiktok: false, whatsapp: false, pinterest: false,
+        hours: false, domain: false, latitude: false, longitude: false, url: false
       }
     });
   }

@@ -472,7 +472,7 @@
   // Save lead to storage (with dedup)
   // ============================================
   async function saveLead(data) {
-    const { leads = [] } = await chrome.storage.local.get(["leads"]);
+    const { leads = [], fields = {} } = await chrome.storage.local.get(["leads", "fields"]);
 
     const exists = leads.some(l =>
       (l.url && l.url === data.url) ||
@@ -480,23 +480,35 @@
     );
     if (exists) return false;
 
-    // Allow ALL useful fields including socials
-    const allowed = [
+    // All possible fields (must match popup.js ALL_FIELDS)
+    const ALL_POSSIBLE = [
       "title", "url", "phone", "address", "website", "domain",
       "category", "rating", "reviewCount", "hours", "email",
       "latitude", "longitude", "plusCode",
       "facebook", "instagram", "twitter", "linkedin", "youtube",
-      "tiktok", "whatsapp", "pinterest",
-      "allEmails", "allPhones", "scrapedAt", "deepScrapedAt"
+      "tiktok", "whatsapp", "pinterest"
     ];
+
+    // Fallback: if no fields config exists, allow common ones
+    const hasUserSelection = Object.keys(fields).length > 0;
     const filtered = {};
-    for (const f of allowed) {
+
+    for (const f of ALL_POSSIBLE) {
+      // Only save if user has selected this field (or no selection set yet)
+      const userWants = hasUserSelection ? !!fields[f] : true;
+      if (!userWants) continue;
       if (data[f] !== undefined && data[f] !== null && data[f] !== "") {
         filtered[f] = data[f];
       }
     }
-    if (!filtered.scrapedAt) filtered.scrapedAt = new Date().toISOString();
-    if (data.url && !filtered.url) filtered.url = data.url;
+
+    // Always save title (required for dedup) + url (required for dedup)
+    if (data.title) filtered.title = data.title;
+    if (data.url) filtered.url = data.url;
+
+    // Internal-only metadata (not user-facing field)
+    filtered.scrapedAt = new Date().toISOString();
+    if (data.deepScrapedAt) filtered.deepScrapedAt = data.deepScrapedAt;
 
     leads.push(filtered);
     await chrome.storage.local.set({ leads });
