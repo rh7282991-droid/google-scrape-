@@ -384,10 +384,20 @@
       return { ok: false, captcha: true };
     }
 
-    // 2. Find results sidebar
-    const container = findResultsContainer();
+    // 2. Find results sidebar (with retry/wait)
+    let container = findResultsContainer();
+    if (!container) {
+      await setProgress({
+        isRunning: true,
+        title: "Waiting for Maps results...",
+        currentItem: "Results feed not yet loaded, waiting up to 30s..."
+      });
+      container = await waitForMapsFeed(30000);
+    }
     if (!container) {
       showToast("Maps results sidebar not found. Make sure search results are visible.", "#dc2626");
+      await setProgress({ isRunning: false, title: "Failed", currentItem: "No results feed found" });
+      setTimeout(clearProgress, 4000);
       CAMPAIGN_RUNNING = false;
       return { ok: false, error: "no-feed" };
     }
@@ -564,6 +574,146 @@
   });
 
   // ============================================
+  // Wait for Google Maps results feed to be ready
+  // (Maps is an SPA — feed loads asynchronously)
+  // ============================================
+  async function waitForMapsFeed(maxWaitMs = 30000) {
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      if (SHOULD_STOP) return null;
+
+      // 1. Captcha check during wait
+      const cap = detectCaptcha();
+      if (cap.detected) {
+        await handleCaptcha(cap);
+        return null;
+      }
+
+      // 2. Try to find feed
+      const feed = findResultsContainer();
+      if (feed) {
+        // Make sure at least 1 result link is rendered before proceeding
+        const links = feed.querySelectorAll('a[href*="/maps/place/"]');
+        if (links.length > 0) {
+          // Give it 1 more second so more cards render
+          await sleep(1000);
+          return feed;
+        }
+      }
+
+      // 3. Detect "no results" state — bail early
+      const bodyText = (document.body && document.body.innerText || "").toLowerCase();
+      if (
+        bodyText.includes("google maps can't find") ||
+        bodyText.includes("no results found") ||
+        bodyText.includes("did you mean")
+      ) {
+        return null;
+      }
+
+      await sleep(500);
+    }
+    return null;
+  }
+
+  // ============================================
+  // Auto-start orchestrator (handles SPA + retries)
+  // ============================================
+  let AUTO_START_IN_PROGRESS = false;
+  let LAST_AUTO_URL = "";
+
+  async function tryAutoStart(reason) {
+    if (AUTO_START_IN_PROGRESS) return;
+    if (CAMPAIGN_RUNNING) return;
+    if (!isMapsPage()) return;
+
+    // Check autoScrape flag fresh every time
+    const { autoScrape, captchaDetected } = await chrome.storage.local.get(["autoScrape", "captchaDetected"]);
+    if (!autoScrape) return;
+
+    // Honor cooldown
+    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
+      const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
+      await setProgress({ isRunning: false, title: "Cooldown", currentItem: `${minsLeft} min remaining` });
+      return;
+    }
+
+    // Only auto-start on search/results URLs (not on /place/ direct links unless feed exists)
+    const isSearchUrl = /\/maps\/search\//.test(location.href) || /\/maps\/?\?q=/.test(location.href);
+    const hasFeedAlready = !!findResultsContainer();
+    if (!isSearchUrl && !hasFeedAlready) return;
+
+    AUTO_START_IN_PROGRESS = true;
+    LAST_AUTO_URL = location.href;
+    console.log("[MLS] Auto-start triggered:", reason);
+
+    try {
+      await setProgress({
+        isRunning: true,
+        title: "Waiting for Maps results to load...",
+        currentItem: "Detecting results feed..."
+      });
+      showToast("Auto-scrape: waiting for results...", "#2563eb");
+
+      // Wait up to 30s for feed
+      const feed = await waitForMapsFeed(30000);
+      if (!feed) {
+        showToast("Could not find Maps results feed. Try reloading.", "#dc2626");
+        await setProgress({ isRunning: false, title: "Failed", currentItem: "No results feed found" });
+        setTimeout(clearProgress, 4000);
+        AUTO_START_IN_PROGRESS = false;
+        return;
+      }
+
+      // Feed found — start the actual campaign
+      await runMapsCampaign();
+    } catch (e) {
+      console.error("[MLS] Auto-start failed:", e);
+      showToast("Auto-scrape error: " + (e?.message || e), "#dc2626");
+    } finally {
+      AUTO_START_IN_PROGRESS = false;
+    }
+  }
+
+  // ============================================
+  // SPA navigation listener — Maps changes URL without reload
+  // ============================================
+  function watchSpaNavigation() {
+    let lastUrl = location.href;
+
+    const checkUrlChange = () => {
+      if (location.href !== lastUrl) {
+        const oldUrl = lastUrl;
+        lastUrl = location.href;
+        console.log("[MLS] URL changed:", oldUrl, "->", lastUrl);
+        // New search? Re-trigger auto-scrape
+        if (!CAMPAIGN_RUNNING && !AUTO_START_IN_PROGRESS) {
+          // Small debounce so URL settles
+          setTimeout(() => tryAutoStart("spa-nav"), 1500);
+        }
+      }
+    };
+
+    // 1. Patch history API
+    const origPush = history.pushState;
+    const origReplace = history.replaceState;
+    history.pushState = function () {
+      origPush.apply(this, arguments);
+      setTimeout(checkUrlChange, 50);
+    };
+    history.replaceState = function () {
+      origReplace.apply(this, arguments);
+      setTimeout(checkUrlChange, 50);
+    };
+
+    // 2. Listen for back/forward
+    window.addEventListener("popstate", () => setTimeout(checkUrlChange, 50));
+
+    // 3. Polling fallback (Maps sometimes changes URL via internal mechanisms)
+    setInterval(checkUrlChange, 1500);
+  }
+
+  // ============================================
   // Auto-start on Maps if autoScrape is on
   // ============================================
   (async () => {
@@ -574,21 +724,22 @@
       return;
     }
 
-    const { autoScrape, captchaDetected } = await chrome.storage.local.get(["autoScrape", "captchaDetected"]);
-
-    // Honor cooldown
-    if (captchaDetected && captchaDetected.cooldownUntil > Date.now()) {
-      const minsLeft = Math.ceil((captchaDetected.cooldownUntil - Date.now()) / 60000);
-      await setProgress({ isRunning: false, title: "Cooldown", currentItem: `${minsLeft} min remaining` });
-      return;
+    // Start watching SPA navigation immediately on every page load
+    if (isMapsPage()) {
+      watchSpaNavigation();
     }
 
-    if (autoScrape && isMapsPage()) {
-      // Wait a moment for Maps to fully load
-      setTimeout(async () => {
-        await runMapsCampaign();
-      }, 2000);
-    }
+    // Initial auto-start attempt (with a small delay so DOM settles)
+    setTimeout(() => tryAutoStart("initial-load"), 800);
   })();
+
+  // Also re-check when storage changes (popup may toggle autoScrape mid-session)
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes.autoScrape && changes.autoScrape.newValue === true) {
+      // Auto-scrape just got enabled — try to start
+      setTimeout(() => tryAutoStart("storage-toggle"), 500);
+    }
+  });
 
 })();
