@@ -150,6 +150,187 @@ async function deepScrapeAll() {
   return { ok: true, updated };
 }
 
+// ===== Webhook =====
+async function postWebhook(url, body, authHeader) {
+  if (!url) return { ok: false, status: 0, error: "Webhook URL not configured" };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (authHeader && String(authHeader).trim()) {
+      headers["Authorization"] = String(authHeader).trim();
+    }
+    const res = await fetch(url, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers,
+      body: JSON.stringify(body)
+    });
+    let responseText = "";
+    try { responseText = await res.text(); } catch (_) {}
+    return {
+      ok: res.ok,
+      status: res.status,
+      responseText: responseText.slice(0, 500),
+      error: res.ok ? undefined : `HTTP ${res.status}`
+    };
+  } catch (e) {
+    return { ok: false, status: 0, error: String(e?.message || e) };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function webhookTest() {
+  const { webhookUrl, webhookAuthHeader } = await chrome.storage.local.get([
+    "webhookUrl", "webhookAuthHeader"
+  ]);
+  if (!webhookUrl) return { ok: false, status: 0, error: "Webhook URL not configured" };
+  const payload = {
+    event: "test",
+    source: "maps-lead-scraper-pro",
+    timestamp: new Date().toISOString(),
+    sample: {
+      title: "Test Business",
+      phone: "+1-555-0100",
+      email: "test@example.com"
+    }
+  };
+  return postWebhook(webhookUrl, payload, webhookAuthHeader);
+}
+
+async function webhookSendAll() {
+  const {
+    leads = [],
+    webhookUrl,
+    webhookAuthHeader,
+    webhookMode = "batch",
+    webhookBatchSize = 50
+  } = await chrome.storage.local.get([
+    "leads", "webhookUrl", "webhookAuthHeader", "webhookMode", "webhookBatchSize"
+  ]);
+
+  if (!webhookUrl) return { ok: false, error: "Webhook URL not configured" };
+  const total = leads.length;
+  if (!total) return { ok: false, error: "No leads to send" };
+
+  const batchSize = Math.max(1, Math.min(500, Number(webhookBatchSize) || 50));
+  let sent = 0;
+  let failed = 0;
+
+  await setProgress({
+    isRunning: true,
+    title: "Sending leads to webhook...",
+    currentPage: 0,
+    totalPages: total,
+    totalFound: 0,
+    currentItem: ""
+  });
+
+  if (webhookMode === "per-lead") {
+    for (let i = 0; i < leads.length; i++) {
+      const lead = leads[i];
+      await setProgress({
+        currentPage: i + 1,
+        currentItem: `Sending: ${lead.title || lead.url || "(unnamed)"}`
+      });
+      const res = await postWebhook(
+        webhookUrl,
+        { event: "lead", lead },
+        webhookAuthHeader
+      );
+      if (res.ok) sent++; else failed++;
+      await setProgress({ totalFound: sent });
+      await new Promise(r => setTimeout(r, 200));
+    }
+    // Sending all is treated as a flush - mark them all as already pushed
+    await chrome.storage.local.set({ webhookLastSentIndex: leads.length });
+  } else {
+    // batch mode
+    for (let i = 0; i < leads.length; i += batchSize) {
+      const chunk = leads.slice(i, i + batchSize);
+      await setProgress({
+        currentPage: Math.min(i + batchSize, total),
+        currentItem: `Sending batch ${Math.floor(i / batchSize) + 1} (${chunk.length} leads)`
+      });
+      const res = await postWebhook(
+        webhookUrl,
+        { event: "leads_batch", count: chunk.length, leads: chunk },
+        webhookAuthHeader
+      );
+      if (res.ok) sent += chunk.length; else failed += chunk.length;
+      await setProgress({ totalFound: sent });
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
+  await setProgress({
+    isRunning: false,
+    currentItem: `Done. Sent ${sent}/${total}, failed ${failed}.`
+  });
+  setTimeout(async () => {
+    await chrome.storage.local.set({ progress: { isRunning: false } });
+  }, 4000);
+
+  return { ok: failed === 0, sent, failed, total };
+}
+
+// Auto-push hook: when leads array grows AND webhookEnabled=true AND mode=per-lead,
+// POST each new lead to the webhook. Tracks webhookLastSentIndex to avoid resending.
+async function autoPushNewLeads(oldLeads, newLeads) {
+  // Only act when leads were appended
+  if (!Array.isArray(newLeads) || !Array.isArray(oldLeads)) return;
+  if (newLeads.length <= oldLeads.length) return;
+
+  const {
+    webhookEnabled,
+    webhookMode = "batch",
+    webhookUrl,
+    webhookAuthHeader,
+    webhookLastSentIndex = 0
+  } = await chrome.storage.local.get([
+    "webhookEnabled", "webhookMode", "webhookUrl",
+    "webhookAuthHeader", "webhookLastSentIndex"
+  ]);
+
+  if (!webhookEnabled) return;
+  if (webhookMode !== "per-lead") return;
+  if (!webhookUrl) return;
+
+  const startIdx = Math.min(
+    Math.max(0, Number(webhookLastSentIndex) || 0),
+    newLeads.length
+  );
+  const toSend = newLeads.slice(startIdx);
+  if (!toSend.length) return;
+
+  for (const lead of toSend) {
+    try {
+      await postWebhook(
+        webhookUrl,
+        { event: "lead", lead },
+        webhookAuthHeader
+      );
+    } catch (_) { /* swallow - best effort */ }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  await chrome.storage.local.set({ webhookLastSentIndex: newLeads.length });
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (!changes.leads) return;
+  const oldLeads = changes.leads.oldValue || [];
+  const newLeads = changes.leads.newValue || [];
+  // Reset sent-index on shrink (e.g. user cleared leads). Do not push.
+  if (newLeads.length < oldLeads.length) {
+    chrome.storage.local.set({ webhookLastSentIndex: newLeads.length });
+    return;
+  }
+  if (newLeads.length === oldLeads.length) return;
+  autoPushNewLeads(oldLeads, newLeads);
+});
+
 // ===== Google Autocomplete =====
 async function fetchGoogleSuggestions(query) {
   if (!query || query.length < 2) return [];
@@ -199,6 +380,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "DEEP_SCRAPE_ALL") {
         sendResponse(await deepScrapeAll());
+      } else if (msg.type === "WEBHOOK_TEST") {
+        sendResponse(await webhookTest());
+      } else if (msg.type === "WEBHOOK_SEND_ALL") {
+        sendResponse(await webhookSendAll());
       } else if (msg.type === "FETCH_SUGGESTIONS") {
         sendResponse({ suggestions: await fetchGoogleSuggestions(msg.query) });
       } else if (msg.type === "CAPTCHA_DETECTED") {

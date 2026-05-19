@@ -250,10 +250,72 @@
           <span class="ic">&#123;&#125;</span> JSON
         </button>
       </div>
-      <button id="runDeep" class="btn-block btn-secondary" style="margin-top:8px;">
-        <span class="ic">&#128269;</span> Deep-Enrich Websites
-      </button>
-      <button id="clear" class="btn-block btn-danger-ghost" style="margin-top:8px;">
+
+      <div class="webhook-section">
+        <div class="webhook-title">
+          <span class="header-icon">&#128268;</span>
+          <span>Webhook (n8n / Zapier / custom URL)</span>
+        </div>
+
+        <label class="toggle-row mini">
+          <span class="toggle-switch">
+            <input type="checkbox" id="webhookEnabled" />
+            <span class="toggle-slider"></span>
+          </span>
+          <span class="toggle-text">
+            <strong>Enable webhook delivery</strong>
+            <small>Auto-push new leads when mode is per-lead</small>
+          </span>
+        </label>
+
+        <div class="form-group webhook-field">
+          <label class="form-label" for="webhookUrl">Webhook URL</label>
+          <input type="url" id="webhookUrl" placeholder="https://your-n8n.example.com/webhook/..." />
+        </div>
+
+        <div class="form-group webhook-field">
+          <label class="form-label" for="webhookAuthHeader">Authorization header (optional)</label>
+          <input type="text" id="webhookAuthHeader" placeholder="Bearer xxx or any token value" />
+        </div>
+
+        <div class="settings-grid webhook-grid">
+          <div class="setting-item">
+            <label for="webhookMode">Mode</label>
+            <select id="webhookMode">
+              <option value="batch" selected>Batch</option>
+              <option value="per-lead">Per-lead</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label for="webhookBatchSize">Batch Size</label>
+            <input type="number" id="webhookBatchSize" min="1" max="500" value="50" />
+          </div>
+        </div>
+
+        <div class="webhook-actions">
+          <button id="webhookTest" class="btn-block btn-secondary">
+            <span class="ic">&#128270;</span> Test Webhook
+          </button>
+          <button id="webhookSendAll" class="btn-block btn-secondary">
+            <span class="ic">&#128228;</span> Send All Leads to Webhook
+          </button>
+        </div>
+
+        <div id="webhookStatus" class="webhook-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Maintenance ===== -->
+  <div class="card">
+    <div class="card-header" style="cursor:default;">
+      <div class="card-header-left">
+        <span class="header-icon">&#128736;</span>
+        <span>Maintenance</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <button id="clear" class="btn-block btn-danger-ghost">
         <span class="ic">&#128465;</span> Clear All Leads
       </button>
     </div>

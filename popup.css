@@ -549,6 +549,62 @@ textarea::placeholder, input::placeholder {
   gap: 8px;
 }
 
+/* ===== Webhook Section ===== */
+.webhook-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #e2e8f0;
+}
+.webhook-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.webhook-section .form-group.webhook-field {
+  padding: 6px 0;
+}
+.webhook-section .settings-grid.webhook-grid {
+  padding: 6px 0;
+  margin-top: 0;
+}
+.webhook-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.webhook-status {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #64748b;
+  min-height: 18px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  word-break: break-word;
+}
+.webhook-status:empty {
+  display: none;
+}
+.webhook-status.ok {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #bbf7d0;
+}
+.webhook-status.err {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fecaca;
+}
+
 /* ===== Status Bar ===== */
 .status-bar {
   display: flex;

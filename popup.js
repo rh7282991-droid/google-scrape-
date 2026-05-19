@@ -443,20 +443,6 @@ ALL_FIELDS.forEach(f => {
   if (el) el.addEventListener("change", saveFields);
 });
 
-// ===== Deep Enrich =====
-$("runDeep").addEventListener("click", async () => {
-  setStatus("Starting deep enrichment...");
-  setStatusBadge("running");
-  const res = await chrome.runtime.sendMessage({ type: "DEEP_SCRAPE_ALL" });
-  if (res && res.ok) {
-    setStatus(`Done. Updated ${res.updated} leads.`);
-  } else {
-    setStatus(`Failed: ${res?.error || "unknown"}`);
-  }
-  setStatusBadge("ready");
-  refreshCounts();
-});
-
 // ===== Export =====
 $("exportCsv").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "EXPORT_CSV" });
@@ -476,8 +462,70 @@ $("clear").addEventListener("click", async () => {
   refreshCounts();
 });
 
+// ===== Webhook =====
+async function loadWebhookSettings() {
+  const s = await chrome.storage.local.get([
+    "webhookEnabled", "webhookUrl", "webhookAuthHeader",
+    "webhookMode", "webhookBatchSize"
+  ]);
+  $("webhookEnabled").checked = !!s.webhookEnabled;
+  $("webhookUrl").value = s.webhookUrl || "";
+  $("webhookAuthHeader").value = s.webhookAuthHeader || "";
+  $("webhookMode").value = s.webhookMode || "batch";
+  $("webhookBatchSize").value = s.webhookBatchSize || 50;
+}
+
+function setWebhookStatus(text, kind) {
+  const el = $("webhookStatus");
+  el.textContent = text || "";
+  el.classList.remove("ok", "err");
+  if (kind === "ok") el.classList.add("ok");
+  else if (kind === "err") el.classList.add("err");
+}
+
+$("webhookEnabled").addEventListener("change", (e) => saveSetting("webhookEnabled", e.target.checked));
+$("webhookUrl").addEventListener("input", (e) => saveSetting("webhookUrl", e.target.value.trim()));
+$("webhookAuthHeader").addEventListener("input", (e) => saveSetting("webhookAuthHeader", e.target.value));
+$("webhookMode").addEventListener("change", (e) => saveSetting("webhookMode", e.target.value));
+$("webhookBatchSize").addEventListener("change", (e) => {
+  const n = Math.max(1, Math.min(500, Number(e.target.value) || 50));
+  e.target.value = n;
+  saveSetting("webhookBatchSize", n);
+});
+
+$("webhookTest").addEventListener("click", async () => {
+  setWebhookStatus("Sending test payload...", null);
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "WEBHOOK_TEST" });
+    if (res && res.ok) {
+      setWebhookStatus(`Test OK (HTTP ${res.status})`, "ok");
+    } else {
+      const code = res && res.status ? `HTTP ${res.status}` : "no response";
+      const err = res && res.error ? ` - ${res.error}` : "";
+      setWebhookStatus(`Test failed (${code})${err}`, "err");
+    }
+  } catch (e) {
+    setWebhookStatus(`Test failed: ${e?.message || e}`, "err");
+  }
+});
+
+$("webhookSendAll").addEventListener("click", async () => {
+  setWebhookStatus("Sending all leads...", null);
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "WEBHOOK_SEND_ALL" });
+    if (res && res.ok) {
+      setWebhookStatus(`Sent ${res.sent}/${res.total} (failed ${res.failed})`, res.failed ? "err" : "ok");
+    } else {
+      setWebhookStatus(`Send failed: ${res?.error || "unknown"}`, "err");
+    }
+  } catch (e) {
+    setWebhookStatus(`Send failed: ${e?.message || e}`, "err");
+  }
+});
+
 // ===== Init =====
 loadSettings();
+loadWebhookSettings();
 refreshCounts();
 pollProgress();
 checkResumeCampaign();
