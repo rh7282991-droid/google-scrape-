@@ -55,7 +55,6 @@ async function refreshCounts() {
     await chrome.storage.local.get(["leads", "todayLeadCount", "lifetimeQuota"]);
   $("totalCount").textContent = leads.length;
   $("totalLeadsHeader").textContent = leads.length;
-  $("previewCount").textContent = leads.length;
   $("todayCount").textContent = todayLeadCount;
   $("quotaLeft").textContent = Math.max(0, lifetimeQuota - leads.length);
 }
@@ -155,23 +154,6 @@ $("clearCampaign").addEventListener("click", async () => {
   await chrome.storage.local.remove(["savedKeywords", "savedLocations"]);
   setStatus("Campaign inputs cleared.");
 });
-
-// ===== Live Preview Table =====
-async function renderPreviewTable() {
-  const { leads = [] } = await chrome.storage.local.get(["leads"]);
-  const tbody = $("previewBody");
-  if (!leads.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>';
-    return;
-  }
-  const last10 = leads.slice(-10).reverse();
-  tbody.innerHTML = last10.map((lead, i) => {
-    const name = (lead.title || "\u2014").slice(0, 22);
-    const phone = (lead.phone || "\u2014").slice(0, 14);
-    const addr = (lead.address || "\u2014").slice(0, 20);
-    return `<tr><td>${i + 1}</td><td title="${(lead.title || '').replace(/"/g, '')}">${name}</td><td>${phone}</td><td title="${(lead.address || '').replace(/"/g, '')}">${addr}</td></tr>`;
-  }).join("");
-}
 
 // ===== Collapsible Cards =====
 function setupCollapsibles() {
@@ -390,9 +372,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.progress) renderProgress(changes.progress.newValue);
   if (changes.leads) {
     refreshCounts();
-    renderPreviewTable();
   }
-  if (changes.accounts || changes.activeAccountIndex) renderAccounts();
   if (changes.captchaDetected) checkCaptchaCooldown();
 });
 
@@ -445,7 +425,6 @@ $("scrapeNow").addEventListener("click", async () => {
     setStatusBadge("error");
   }
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Settings listeners =====
@@ -476,7 +455,6 @@ $("runDeep").addEventListener("click", async () => {
   }
   setStatusBadge("ready");
   refreshCounts();
-  renderPreviewTable();
 });
 
 // ===== Export =====
@@ -496,77 +474,12 @@ $("clear").addEventListener("click", async () => {
   await chrome.storage.local.remove(["campaignState"]);
   setStatus("All leads cleared.");
   refreshCounts();
-  renderPreviewTable();
-});
-
-// ===== Account Management =====
-async function renderAccounts() {
-  const { accounts = [], activeAccountIndex = 0, accountRotationThreshold = 50 } =
-    await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
-  $("rotationThreshold").value = accountRotationThreshold;
-
-  const list = $("accountList");
-  const badge = $("activeAccountBadge");
-
-  if (!accounts.length) {
-    list.innerHTML = '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:8px;">No accounts added.</div>';
-    $("accountInfo").innerHTML = `<small>Add Google accounts to auto-rotate every ${accountRotationThreshold} leads.</small>`;
-    badge.textContent = "None";
-    return;
-  }
-
-  const active = accounts[activeAccountIndex];
-  badge.textContent = active ? active.label.split("@")[0].slice(0, 12) : "None";
-  $("accountInfo").innerHTML = `<small>Active: <b>${active?.label || "\u2014"}</b> &middot; ${active?.leadsCollected || 0}/${accountRotationThreshold} leads</small>`;
-
-  list.innerHTML = accounts.map((acc, i) => {
-    const isActive = i === activeAccountIndex;
-    return `<div class="account-row ${isActive ? 'active' : ''}">
-      <span class="ind"></span>
-      <span class="label">${acc.label}</span>
-      <span class="count">${acc.leadsCollected || 0}</span>
-      <button class="btn-mini btn-danger remove-acc-btn" data-id="${acc.id}">\u00d7</button>
-    </div>`;
-  }).join("");
-
-  list.querySelectorAll(".remove-acc-btn").forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await chrome.runtime.sendMessage({ type: "REMOVE_ACCOUNT", id: btn.dataset.id });
-      renderAccounts();
-    });
-  });
-}
-
-$("addAccountBtn").addEventListener("click", async () => {
-  const label = $("newAccountLabel").value.trim();
-  if (!label) return;
-  const res = await chrome.runtime.sendMessage({ type: "ADD_ACCOUNT", label });
-  if (res && res.ok) {
-    $("newAccountLabel").value = "";
-    renderAccounts();
-    setStatus(`Account "${label}" added.`);
-  } else {
-    setStatus(`Failed: ${res?.error || "unknown"}`);
-  }
-});
-
-$("newAccountLabel").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("addAccountBtn").click();
-});
-
-$("rotationThreshold").addEventListener("change", async (e) => {
-  const val = Math.max(10, Math.min(500, Number(e.target.value) || 50));
-  await chrome.storage.local.set({ accountRotationThreshold: val });
-  renderAccounts();
 });
 
 // ===== Init =====
 loadSettings();
 refreshCounts();
 pollProgress();
-renderPreviewTable();
 checkResumeCampaign();
-renderAccounts();
 checkCaptchaCooldown();
 setupCollapsibles();

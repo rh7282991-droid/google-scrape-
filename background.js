@@ -180,77 +180,6 @@ async function showCaptchaNotification(info) {
   } catch (e) { console.warn("[MLS] Notification failed:", e); }
 }
 
-// ===== Account rotation =====
-async function addAccount(label) {
-  if (!label || !label.trim()) return { ok: false, error: "Label required" };
-  const { accounts = [] } = await chrome.storage.local.get(["accounts"]);
-  const id = "acc_" + Date.now();
-  accounts.push({
-    id, label: label.trim(),
-    leadsCollected: 0, flaggedCount: 0,
-    addedAt: Date.now(), lastUsedAt: null
-  });
-  await chrome.storage.local.set({ accounts });
-  return { ok: true, account: accounts[accounts.length - 1] };
-}
-
-async function removeAccount(id) {
-  const { accounts = [], activeAccountIndex = 0 } = await chrome.storage.local.get(["accounts", "activeAccountIndex"]);
-  const idx = accounts.findIndex(a => a.id === id);
-  if (idx === -1) return { ok: false, error: "Not found" };
-  accounts.splice(idx, 1);
-  let newIdx = activeAccountIndex;
-  if (newIdx >= accounts.length) newIdx = 0;
-  await chrome.storage.local.set({ accounts, activeAccountIndex: newIdx });
-  return { ok: true };
-}
-
-async function incrementAccountLeads(count) {
-  if (!count) return { ok: true };
-  const {
-    accounts = [], activeAccountIndex = 0, accountRotationThreshold = 50
-  } = await chrome.storage.local.get(["accounts", "activeAccountIndex", "accountRotationThreshold"]);
-
-  if (!accounts.length) return { ok: true, hasAccounts: false };
-  const active = accounts[activeAccountIndex];
-  if (!active) return { ok: true };
-
-  active.leadsCollected = (active.leadsCollected || 0) + count;
-  active.lastUsedAt = Date.now();
-  await chrome.storage.local.set({ accounts });
-
-  if (active.leadsCollected >= accountRotationThreshold) {
-    return await rotateAccount(`reached ${accountRotationThreshold} leads`);
-  }
-  return { ok: true, leadsCollected: active.leadsCollected };
-}
-
-async function rotateAccount(reason) {
-  const { accounts = [], activeAccountIndex = 0 } = await chrome.storage.local.get(["accounts", "activeAccountIndex"]);
-  if (accounts.length < 2) return { ok: false, error: "Need 2+ accounts to rotate" };
-
-  if (reason && reason.includes("flagged")) {
-    accounts[activeAccountIndex].flaggedCount = (accounts[activeAccountIndex].flaggedCount || 0) + 1;
-  }
-  accounts[activeAccountIndex].leadsCollected = 0;
-  const nextIndex = (activeAccountIndex + 1) % accounts.length;
-
-  await chrome.storage.local.set({
-    accounts, activeAccountIndex: nextIndex,
-    lastRotation: { at: Date.now(), from: accounts[activeAccountIndex].label, to: accounts[nextIndex].label, reason }
-  });
-
-  try {
-    await chrome.notifications.create("account-rotated-" + Date.now(), {
-      type: "basic", iconUrl: "icons/icon128.png",
-      title: "Account rotated",
-      message: `Switched to "${accounts[nextIndex].label}". Reason: ${reason}.`,
-      priority: 1
-    });
-  } catch (_) {}
-  return { ok: true, rotated: true, to: accounts[nextIndex].label };
-}
-
 // ===== Message router =====
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
@@ -275,16 +204,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       } else if (msg.type === "CAPTCHA_DETECTED") {
         await showCaptchaNotification(msg.info);
         sendResponse({ ok: true });
-      } else if (msg.type === "ACCOUNT_LEADS_INCREMENT") {
-        sendResponse(await incrementAccountLeads(msg.count || 0));
-      } else if (msg.type === "ACCOUNT_FLAGGED") {
-        sendResponse(await rotateAccount("flagged: " + (msg.reason || "unknown")));
-      } else if (msg.type === "ADD_ACCOUNT") {
-        sendResponse(await addAccount(msg.label));
-      } else if (msg.type === "REMOVE_ACCOUNT") {
-        sendResponse(await removeAccount(msg.id));
-      } else if (msg.type === "ROTATE_ACCOUNT") {
-        sendResponse(await rotateAccount("manual"));
       } else if (msg.type === "OPEN_MAPS") {
         // Open Google Maps with query
         const query = msg.query || "";
@@ -354,7 +273,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const cur = await chrome.storage.local.get(["leads", "fields", "accounts", "lifetimeQuota"]);
+  const cur = await chrome.storage.local.get(["leads", "fields", "lifetimeQuota"]);
   if (!cur.leads) await chrome.storage.local.set({ leads: [] });
   if (!cur.lifetimeQuota) await chrome.storage.local.set({ lifetimeQuota: 300 });
   if (!cur.fields) {
@@ -363,12 +282,6 @@ chrome.runtime.onInstalled.addListener(async () => {
         title: true, phone: true, email: true, website: true,
         address: true, category: true, rating: true, reviewCount: true
       }
-    });
-  }
-  if (!cur.accounts) {
-    await chrome.storage.local.set({
-      accounts: [], activeAccountIndex: 0,
-      accountLeadsCount: 0, accountRotationThreshold: 50
     });
   }
   // Setup alarms

@@ -452,49 +452,6 @@ textarea::placeholder, input::placeholder {
 .card-body { padding: 0 16px 14px; }
 .card.collapsible.collapsed .card-body { display: none; }
 
-/* ===== Preview Table ===== */
-.preview-table-wrap {
-  max-height: 200px;
-  overflow-y: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-}
-.preview-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
-}
-.preview-table th {
-  text-align: left;
-  padding: 7px 10px;
-  background: #f8fafc;
-  color: #64748b;
-  font-weight: 600;
-  position: sticky;
-  top: 0;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  border-bottom: 1px solid #e2e8f0;
-}
-.preview-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid #f1f5f9;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 110px;
-  color: #334155;
-}
-.preview-table tr:hover td { background: #f8fafc; }
-.empty-msg {
-  color: #94a3b8;
-  text-align: center;
-  font-style: italic;
-  padding: 16px !important;
-  font-size: 11px;
-}
-
 /* ===== Fields Grid ===== */
 .fields-grid {
   display: grid;
@@ -578,51 +535,12 @@ textarea::placeholder, input::placeholder {
 .suggest-list li:hover { background: #eff6ff; color: #2563eb; }
 .suggest-list li:last-child { border-bottom: none; }
 
-/* ===== Account Section ===== */
-.account-info { margin-bottom: 8px; }
-.account-info small { color: #64748b; font-size: 11px; }
-.account-info b { color: #2563eb; font-weight: 600; }
-.account-list { margin-bottom: 10px; max-height: 100px; overflow-y: auto; }
-.account-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  margin-bottom: 4px;
-  font-size: 11px;
-}
-.account-row.active {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-}
-.account-row .ind {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: #cbd5e1;
-  flex-shrink: 0;
-}
-.account-row.active .ind { background: #22c55e; }
-.account-row .label { flex: 1; font-weight: 500; }
-.account-row.active .label { font-weight: 600; color: #1e40af; }
-.account-row .count { color: #64748b; font-size: 10px; }
+/* ===== Inline Row ===== */
 .inline-row {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.input-sm {
-  flex: 1;
-  padding: 7px 10px;
-  font-size: 12px;
-}
-.input-xs {
-  width: 60px;
-  padding: 5px 8px;
-  font-size: 12px;
-}
-.label-sm { font-size: 11px; color: #475569; font-weight: 500; }
 
 /* ===== Export Grid ===== */
 .export-grid {

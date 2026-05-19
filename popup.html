@@ -172,28 +172,6 @@
     </button>
   </div>
 
-  <!-- ===== Live Preview (Feature 14) ===== -->
-  <div class="card collapsible" id="previewPanel">
-    <div class="card-header" id="previewHeader">
-      <div class="card-header-left">
-        <span class="header-icon">&#128190;</span>
-        <span>Live Preview</span>
-        <span class="badge-count" id="previewCount">0</span>
-      </div>
-      <span class="chevron" id="previewChevron">&#9650;</span>
-    </div>
-    <div class="card-body">
-      <div class="preview-table-wrap" id="previewTableWrap">
-        <table class="preview-table">
-          <thead><tr><th>#</th><th>Business</th><th>Phone</th><th>Address</th></tr></thead>
-          <tbody id="previewBody">
-            <tr><td colspan="4" class="empty-msg">No leads yet. Click "Start" above.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
   <!-- ===== Fields to Extract (Maps-specific) ===== -->
   <div class="card collapsible">
     <div class="card-header" id="fieldsHeader">
@@ -217,33 +195,6 @@
         <label class="field-chip"><input type="checkbox" id="f_domain" /><span>Domain</span></label>
         <label class="field-chip"><input type="checkbox" id="f_latitude" /><span>Coordinates</span></label>
         <label class="field-chip"><input type="checkbox" id="f_url" /><span>Maps URL</span></label>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===== Account Rotation (Feature 5) ===== -->
-  <div class="card collapsible">
-    <div class="card-header" id="accountHeader">
-      <div class="card-header-left">
-        <span class="header-icon">&#128100;</span>
-        <span>Account Rotation</span>
-        <span class="badge-pill" id="activeAccountBadge">None</span>
-      </div>
-      <span class="chevron">&#9650;</span>
-    </div>
-    <div class="card-body">
-      <div class="account-info" id="accountInfo">
-        <small>Add Google accounts to auto-rotate every 50 leads.</small>
-      </div>
-      <div class="account-list" id="accountList"></div>
-      <div class="inline-row">
-        <input type="text" id="newAccountLabel" placeholder="account@gmail.com" class="input-sm" />
-        <button id="addAccountBtn" class="btn-mini btn-primary">Add</button>
-      </div>
-      <div class="inline-row" style="margin-top:8px;">
-        <label class="label-sm">Rotate every:</label>
-        <input type="number" id="rotationThreshold" min="10" max="500" value="50" class="input-xs" />
-        <span class="label-sm">leads</span>
       </div>
     </div>
   </div>

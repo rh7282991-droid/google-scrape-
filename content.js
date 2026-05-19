@@ -54,7 +54,6 @@
     showToast("Suspicious activity detected. Pausing 30 min.", "#dc2626");
     try {
       await chrome.runtime.sendMessage({ type: "CAPTCHA_DETECTED", info: { ...info, cooldownUntil, url: location.href } });
-      await chrome.runtime.sendMessage({ type: "ACCOUNT_FLAGGED", reason: "captcha" });
     } catch (_) {}
   }
 
@@ -463,11 +462,6 @@
       } catch (e) {
         console.warn("[Maps] Failed to extract profile:", e);
       }
-
-      // Track for account rotation
-      try {
-        await chrome.runtime.sendMessage({ type: "ACCOUNT_LEADS_INCREMENT", count: 1 });
-      } catch (_) {}
     }
 
     await setProgress({
