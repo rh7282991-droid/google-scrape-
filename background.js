@@ -14,7 +14,9 @@ function leadsToCsv(leads) {
   leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
   // Maps-specific preferred order
   const preferred = [
-    "title", "phone", "email", "website", "address", "category",
+    "title", "phone", "email",
+    "allEmails", "facebook", "instagram", "twitter", "linkedin", "youtube", "tiktok",
+    "website", "address", "category",
     "rating", "reviewCount", "hours", "domain",
     "latitude", "longitude", "plusCode", "url", "scrapedAt"
   ];
@@ -41,6 +43,49 @@ function downloadText(text, filename, mime) {
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
 
+// Canonical regex source for social-media URL detection.
+// content.js mirrors these patterns (separate JS context for content scripts).
+// Keep these in sync with the SOCIAL_PATTERNS object near the top of content.js.
+const SOCIAL_PATTERNS = {
+  facebook:  /https?:\/\/(?:www\.|m\.|business\.)?facebook\.com\/[A-Za-z0-9_.\-/?=&%]+/gi,
+  instagram: /https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\-/?=&%]+/gi,
+  twitter:   /https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[A-Za-z0-9_.\-/?=&%]+/gi,
+  linkedin:  /https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in|school)\/[A-Za-z0-9_.\-/?=&%]+/gi,
+  youtube:   /https?:\/\/(?:www\.)?youtube\.com\/(?:channel|user|c|@)[A-Za-z0-9_.\-/?=&%]+/gi,
+  tiktok:    /https?:\/\/(?:www\.)?tiktok\.com\/@[A-Za-z0-9_.\-/?=&%]+/gi
+};
+
+// Strip trailing punctuation and quote-like characters that often follow URLs in HTML.
+function cleanSocialUrl(u) {
+  if (!u) return u;
+  let s = String(u).trim();
+  // Strip trailing quote/bracket/paren/whitespace characters
+  s = s.replace(/["'<>)\]\s]+$/g, "");
+  // Strip a single trailing slash for canonical comparison (but keep e.g. /channel/UC...)
+  s = s.replace(/\/+$/, "");
+  return s;
+}
+
+function extractSocialFromHtml(html) {
+  const out = { facebook: [], instagram: [], twitter: [], linkedin: [], youtube: [], tiktok: [] };
+  if (!html) return out;
+  for (const platform of Object.keys(SOCIAL_PATTERNS)) {
+    const re = SOCIAL_PATTERNS[platform];
+    re.lastIndex = 0;
+    const matches = html.match(re) || [];
+    const seen = new Set();
+    for (const raw of matches) {
+      const u = cleanSocialUrl(raw);
+      if (!u) continue;
+      const key = u.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out[platform].push(u);
+    }
+  }
+  return out;
+}
+
 function extractContactsFromHtml(html) {
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -63,7 +108,8 @@ function extractContactsFromHtml(html) {
       return digits.length >= 8 && digits.length <= 15;
     })
   ));
-  return { emails, phones };
+  const social = extractSocialFromHtml(html);
+  return { emails, phones, social };
 }
 
 async function fetchPage(url) {
@@ -80,6 +126,52 @@ async function fetchPage(url) {
     return await res.text();
   } catch (_) { return null; }
   finally { clearTimeout(t); }
+}
+
+// Fetch the homepage + common contact pages of a lead's website in parallel and
+// extract emails / phones / social URLs from the combined HTML. Capped at 4 pages
+// total. Each fetchPage() has its own 12s timeout, all four run in parallel so the
+// wall-clock is bounded near ~12s; we add an overall ~25s safety wrapper.
+async function enrichLeadFromWebsite(websiteUrl) {
+  const empty = { emails: [], phones: [], social: { facebook: [], instagram: [], twitter: [], linkedin: [], youtube: [], tiktok: [] } };
+  if (!websiteUrl) return empty;
+
+  let origin = "";
+  try { origin = new URL(websiteUrl).origin; } catch (_) { return empty; }
+
+  const urls = [
+    websiteUrl,
+    origin + "/contact",
+    origin + "/about",
+    origin + "/contact-us"
+  ].slice(0, 4);
+
+  // Overall safety budget so a slow site can't stall the live scrape forever.
+  const overall = new Promise(resolve => setTimeout(() => resolve("__timeout__"), 25000));
+  const fetches = Promise.all(urls.map(u => fetchPage(u).catch(() => null)));
+  const result = await Promise.race([fetches, overall]);
+  const htmls = Array.isArray(result) ? result : [];
+
+  const merged = { emails: new Set(), phones: new Set(), social: { facebook: new Set(), instagram: new Set(), twitter: new Set(), linkedin: new Set(), youtube: new Set(), tiktok: new Set() } };
+  for (const html of htmls) {
+    if (!html) continue;
+    const c = extractContactsFromHtml(html);
+    c.emails.forEach(e => merged.emails.add(e));
+    c.phones.forEach(p => merged.phones.add(p));
+    for (const platform of Object.keys(merged.social)) {
+      (c.social[platform] || []).forEach(u => merged.social[platform].add(u));
+    }
+  }
+
+  const social = {};
+  for (const platform of Object.keys(merged.social)) {
+    social[platform] = Array.from(merged.social[platform]);
+  }
+  return {
+    emails: Array.from(merged.emails),
+    phones: Array.from(merged.phones),
+    social
+  };
 }
 
 async function setProgress(patch) {
@@ -119,19 +211,27 @@ async function deepScrapeAll() {
         currentItem: `Visiting: ${lead.domain || lead.website}`
       });
 
-      const html = await fetchPage(lead.website);
-      if (!html) return;
-      const { emails, phones } = extractContactsFromHtml(html);
+      const enriched = await enrichLeadFromWebsite(lead.website);
+      if (!enriched) return;
+      const { emails, phones, social } = enriched;
 
       if (emails.length && !lead.email) lead.email = emails[0];
       lead.allEmails = emails;
       if (phones.length && !lead.phone) lead.phone = phones[0];
       lead.allPhones = phones;
+      lead.social = social;
+      // Flat per-platform fields (first match) for simpler CSV columns.
+      for (const platform of Object.keys(social)) {
+        if (social[platform] && social[platform].length) {
+          lead[platform] = social[platform][0];
+        }
+      }
       lead.deepScrapedAt = new Date().toISOString();
 
-      if (emails.length || phones.length) {
+      const socialCount = Object.values(social).reduce((n, arr) => n + (arr ? arr.length : 0), 0);
+      if (emails.length || phones.length || socialCount) {
         updated++;
-        totalContacts += emails.length + phones.length;
+        totalContacts += emails.length + phones.length + socialCount;
       }
       await setProgress({ totalFound: totalContacts });
     }));
@@ -380,6 +480,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
       } else if (msg.type === "DEEP_SCRAPE_ALL") {
         sendResponse(await deepScrapeAll());
+      } else if (msg.type === "ENRICH_LEAD") {
+        sendResponse(await enrichLeadFromWebsite(msg.website));
       } else if (msg.type === "WEBHOOK_TEST") {
         sendResponse(await webhookTest());
       } else if (msg.type === "WEBHOOK_SEND_ALL") {

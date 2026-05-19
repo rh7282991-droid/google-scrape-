@@ -6,12 +6,12 @@ const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
 
 // Maps-specific fields
-const ALL_FIELDS = ["title", "phone", "email", "website", "address", "category",
+const ALL_FIELDS = ["title", "phone", "email", "socialMedia", "website", "address", "category",
   "rating", "reviewCount", "hours", "domain", "latitude", "url"];
 const DEFAULT_FIELDS = {
   title: true, phone: true, email: true, website: true,
   address: true, category: true, rating: true, reviewCount: true,
-  hours: false, domain: false, latitude: false, url: false
+  socialMedia: false, hours: false, domain: false, latitude: false, url: false
 };
 
 // ===== Location DB =====

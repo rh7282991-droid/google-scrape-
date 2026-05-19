@@ -10,6 +10,53 @@
   const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
 
+  // Social-media URL patterns. Mirror of background.js SOCIAL_PATTERNS. Content
+  // scripts and service workers are separate JS contexts, so the regex source is
+  // duplicated here. Keep these in sync with background.js's SOCIAL_PATTERNS.
+  const SOCIAL_PATTERNS = {
+    facebook:  /^https?:\/\/(?:www\.|m\.|business\.)?facebook\.com\/[A-Za-z0-9_.\-/?=&%]+/i,
+    instagram: /^https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\-/?=&%]+/i,
+    twitter:   /^https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[A-Za-z0-9_.\-/?=&%]+/i,
+    linkedin:  /^https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in|school)\/[A-Za-z0-9_.\-/?=&%]+/i,
+    youtube:   /^https?:\/\/(?:www\.)?youtube\.com\/(?:channel|user|c|@)[A-Za-z0-9_.\-/?=&%]+/i,
+    tiktok:    /^https?:\/\/(?:www\.)?tiktok\.com\/@[A-Za-z0-9_.\-/?=&%]+/i
+  };
+
+  function emptySocial() {
+    return { facebook: [], instagram: [], twitter: [], linkedin: [], youtube: [], tiktok: [] };
+  }
+
+  function cleanSocialUrl(u) {
+    if (!u) return u;
+    let s = String(u).trim();
+    s = s.replace(/["'<>)\]\s]+$/g, "");
+    s = s.replace(/\/+$/, "");
+    return s;
+  }
+
+  function mergeSocialObjects(a, b) {
+    const merged = emptySocial();
+    for (const platform of Object.keys(merged)) {
+      const seen = new Set();
+      const out = [];
+      const push = (arr) => {
+        if (!arr) return;
+        for (const raw of arr) {
+          const u = cleanSocialUrl(raw);
+          if (!u) continue;
+          const key = u.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(u);
+        }
+      };
+      push(a && a[platform]);
+      push(b && b[platform]);
+      merged[platform] = out;
+    }
+    return merged;
+  }
+
   let CAMPAIGN_RUNNING = false;
   let SHOULD_STOP = false;
 
@@ -284,6 +331,32 @@
       out.longitude = parseFloat(m[2]);
     }
 
+    // Social media: scan all anchor tags within the detail panel for URLs
+    // matching the SOCIAL_PATTERNS mirror at the top of this file.
+    const social = emptySocial();
+    const seenSocial = { facebook: new Set(), instagram: new Set(), twitter: new Set(), linkedin: new Set(), youtube: new Set(), tiktok: new Set() };
+    const panel = document.querySelector('div[role="main"]') || document.body;
+    if (panel) {
+      const anchors = panel.querySelectorAll('a[href]');
+      anchors.forEach(a => {
+        const href = a.getAttribute("href") || a.href || "";
+        if (!href || !/^https?:\/\//i.test(href)) return;
+        for (const platform of Object.keys(SOCIAL_PATTERNS)) {
+          if (SOCIAL_PATTERNS[platform].test(href)) {
+            const u = cleanSocialUrl(href);
+            if (!u) return;
+            const key = u.toLowerCase();
+            if (!seenSocial[platform].has(key)) {
+              seenSocial[platform].add(key);
+              social[platform].push(u);
+            }
+            return;
+          }
+        }
+      });
+    }
+    out.social = social;
+
     out.scrapedAt = new Date().toISOString();
     return out;
   }
@@ -456,6 +529,41 @@
         // Extract from detail panel
         const data = await extractDetailPanel();
         if (data && data.title) {
+          // Optional website enrichment for emails / social links.
+          const fields = settings.fields || {};
+          if ((fields.email || fields.socialMedia) && data.website) {
+            try {
+              const resp = await chrome.runtime.sendMessage({
+                type: "ENRICH_LEAD",
+                website: data.website
+              });
+              if (resp && typeof resp === "object") {
+                const emails = Array.isArray(resp.emails) ? resp.emails : [];
+                const social = resp.social || {};
+                if (!data.email && emails.length) data.email = emails[0];
+                data.allEmails = emails;
+                data.social = mergeSocialObjects(data.social || {}, social);
+                for (const platform of Object.keys(emptySocial())) {
+                  const list = data.social[platform];
+                  if (list && list.length && !data[platform]) {
+                    data[platform] = list[0];
+                  }
+                }
+              }
+            } catch (e) {
+              // Website fetch failure must not block the lead from saving.
+              console.warn("[MLS] ENRICH_LEAD failed:", e);
+            }
+          } else if (data.social) {
+            // No background enrichment: still surface flat per-platform fields
+            // from whatever the panel DOM scan found.
+            for (const platform of Object.keys(emptySocial())) {
+              const list = data.social[platform];
+              if (list && list.length && !data[platform]) {
+                data[platform] = list[0];
+              }
+            }
+          }
           const added = await saveLead(data);
           if (added) totalSaved++;
         }
@@ -493,7 +601,9 @@
     // Apply field filter
     const filtered = { scrapedAt: data.scrapedAt };
     const allowed = ["title", "url", "phone", "address", "website", "domain",
-      "category", "rating", "reviewCount", "hours", "email", "latitude", "longitude", "plusCode"];
+      "category", "rating", "reviewCount", "hours", "email", "allEmails",
+      "social", "facebook", "instagram", "twitter", "linkedin", "youtube", "tiktok",
+      "latitude", "longitude", "plusCode"];
     for (const f of allowed) {
       if (data[f] !== undefined) filtered[f] = data[f];
     }
