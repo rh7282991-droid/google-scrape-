@@ -13,12 +13,15 @@
   // Social-media URL patterns. Mirror of background.js SOCIAL_PATTERNS. Content
   // scripts and service workers are separate JS contexts, so the regex source is
   // duplicated here. Keep these in sync with background.js's SOCIAL_PATTERNS.
+  // YouTube alternation requires a literal `/` after `channel|user|c` so paths
+  // like `youtube.com/cooking` do not match as a "c" channel. The `@` handle
+  // keeps no trailing slash (it is followed directly by the username).
   const SOCIAL_PATTERNS = {
     facebook:  /^https?:\/\/(?:www\.|m\.|business\.)?facebook\.com\/[A-Za-z0-9_.\-/?=&%]+/i,
     instagram: /^https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\-/?=&%]+/i,
     twitter:   /^https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[A-Za-z0-9_.\-/?=&%]+/i,
     linkedin:  /^https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in|school)\/[A-Za-z0-9_.\-/?=&%]+/i,
-    youtube:   /^https?:\/\/(?:www\.)?youtube\.com\/(?:channel|user|c|@)[A-Za-z0-9_.\-/?=&%]+/i,
+    youtube:   /^https?:\/\/(?:www\.)?youtube\.com\/(?:(?:channel|user|c)\/|@)[A-Za-z0-9_.\-/?=&%]+/i,
     tiktok:    /^https?:\/\/(?:www\.)?tiktok\.com\/@[A-Za-z0-9_.\-/?=&%]+/i
   };
 
@@ -29,7 +32,8 @@
   function cleanSocialUrl(u) {
     if (!u) return u;
     let s = String(u).trim();
-    s = s.replace(/["'<>)\]\s]+$/g, "");
+    // Strip trailing quote/bracket/paren/comma/semicolon/whitespace characters
+    s = s.replace(/[",;'<>)\]\s]+$/g, "");
     s = s.replace(/\/+$/, "");
     return s;
   }
@@ -319,6 +323,30 @@
     const mailto = document.querySelector('a[href^="mailto:"]');
     if (mailto) out.email = mailto.href.replace(/^mailto:/, "").trim();
 
+    // Visible-text email regex on the detail panel. Maps rarely surfaces an
+    // email in plain text, but the brief calls for this scan in addition to
+    // the mailto: anchor and the website-fetch path. Collect every match so
+    // panel-derived emails join the dedup set with website-fetch emails.
+    const emailHits = [];
+    const panelForEmail = document.querySelector('div[role="main"]') || document.body;
+    if (panelForEmail) {
+      const panelText = panelForEmail.innerText || "";
+      EMAIL_RE.lastIndex = 0;
+      const matches = panelText.match(EMAIL_RE) || [];
+      const seen = new Set();
+      for (const raw of matches) {
+        const e = String(raw).toLowerCase();
+        if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(e)) continue;
+        if (seen.has(e)) continue;
+        seen.add(e);
+        emailHits.push(e);
+      }
+    }
+    if (emailHits.length) {
+      if (!out.email) out.email = emailHits[0];
+      out.allEmails = emailHits;
+    }
+
     // Domain
     if (out.website) {
       try { out.domain = new URL(out.website).hostname.replace(/^www\./, ""); } catch (_) {}
@@ -500,6 +528,15 @@
     const profileWaitMs = (settings.profileWait || 7) * 1000;
 
     // 5. For each card, click to open detail and extract
+    //
+    // Latency note: per-lead enrichment (ENRICH_LEAD message round trip) runs
+    // sequentially inside this loop because the Maps SPA only renders one
+    // detail panel at a time, so we click + wait + extract per lead. Each
+    // ENRICH_LEAD call is bounded to ~25s (see enrichLeadFromWebsite in
+    // background.js), and is gated on (fields.email || fields.socialMedia)
+    // AND data.website, so a campaign with both options off skips it
+    // entirely. Cross-lead concurrency would require restructuring this loop
+    // and is intentionally deferred.
     for (let i = 0; i < cards.length && i < target; i++) {
       if (SHOULD_STOP) break;
 
@@ -541,7 +578,18 @@
                 const emails = Array.isArray(resp.emails) ? resp.emails : [];
                 const social = resp.social || {};
                 if (!data.email && emails.length) data.email = emails[0];
-                data.allEmails = emails;
+                // Merge panel-derived emails (from EMAIL_RE on detail panel)
+                // with website-fetch emails, preserving order and deduping.
+                const existing = Array.isArray(data.allEmails) ? data.allEmails : [];
+                const seenE = new Set();
+                const mergedEmails = [];
+                for (const e of [...existing, ...emails]) {
+                  const k = String(e).toLowerCase();
+                  if (seenE.has(k)) continue;
+                  seenE.add(k);
+                  mergedEmails.push(e);
+                }
+                data.allEmails = mergedEmails;
                 data.social = mergeSocialObjects(data.social || {}, social);
                 for (const platform of Object.keys(emptySocial())) {
                   const list = data.social[platform];
@@ -600,7 +648,7 @@
 
     // Apply field filter
     const filtered = { scrapedAt: data.scrapedAt };
-    const allowed = ["title", "url", "phone", "address", "website", "domain",
+    const allowed = ["title", "url", "phone", "allPhones", "address", "website", "domain",
       "category", "rating", "reviewCount", "hours", "email", "allEmails",
       "social", "facebook", "instagram", "twitter", "linkedin", "youtube", "tiktok",
       "latitude", "longitude", "plusCode"];

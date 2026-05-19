@@ -569,6 +569,12 @@ textarea::placeholder, input::placeholder {
 .webhook-section .form-group.webhook-field {
   padding: 6px 0;
 }
+.webhook-section .form-hint {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 4px;
+  line-height: 1.4;
+}
 .webhook-section .settings-grid.webhook-grid {
   padding: 6px 0;
   margin-top: 0;

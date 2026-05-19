@@ -276,7 +276,8 @@
 
         <div class="form-group webhook-field">
           <label class="form-label" for="webhookAuthHeader">Authorization header (optional)</label>
-          <input type="text" id="webhookAuthHeader" placeholder="Bearer xxx or any token value" />
+          <input type="password" id="webhookAuthHeader" placeholder="Bearer xxx or any token value" autocomplete="off" />
+          <div class="form-hint">Stored locally in chrome.storage. Sent as the Authorization request header.</div>
         </div>
 
         <div class="settings-grid webhook-grid">

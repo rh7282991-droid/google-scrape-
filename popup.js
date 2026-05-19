@@ -473,6 +473,8 @@ async function loadWebhookSettings() {
   $("webhookAuthHeader").value = s.webhookAuthHeader || "";
   $("webhookMode").value = s.webhookMode || "batch";
   $("webhookBatchSize").value = s.webhookBatchSize || 50;
+  // Surface a warning if the persisted URL is non-HTTPS.
+  if (s.webhookUrl) checkWebhookUrlScheme(s.webhookUrl);
 }
 
 function setWebhookStatus(text, kind) {
@@ -483,8 +485,41 @@ function setWebhookStatus(text, kind) {
   else if (kind === "err") el.classList.add("err");
 }
 
+// Validate the webhook URL on the popup side and surface a warning when the
+// scheme is not https. We accept http (some self-hosted relays are http-only)
+// but a typo to a public http URL would silently exfiltrate lead data on the
+// next scrape, so we surface it on the status line as a non-blocking warning.
+function checkWebhookUrlScheme(url) {
+  if (!url) {
+    setWebhookStatus("", null);
+    return { ok: true };
+  }
+  let parsed;
+  try { parsed = new URL(url); } catch (_) {
+    setWebhookStatus("Invalid URL. Use https://... (or http:// for local relays).", "err");
+    return { ok: false };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    setWebhookStatus(`URL must use http(s):// (got ${parsed.protocol})`, "err");
+    return { ok: false };
+  }
+  if (parsed.protocol === "http:") {
+    setWebhookStatus(
+      "Warning: non-HTTPS webhook URL. Lead data will be sent unencrypted.",
+      "err"
+    );
+    return { ok: true, warn: true };
+  }
+  setWebhookStatus("", null);
+  return { ok: true };
+}
+
 $("webhookEnabled").addEventListener("change", (e) => saveSetting("webhookEnabled", e.target.checked));
-$("webhookUrl").addEventListener("input", (e) => saveSetting("webhookUrl", e.target.value.trim()));
+$("webhookUrl").addEventListener("input", (e) => {
+  const v = e.target.value.trim();
+  saveSetting("webhookUrl", v);
+  checkWebhookUrlScheme(v);
+});
 $("webhookAuthHeader").addEventListener("input", (e) => saveSetting("webhookAuthHeader", e.target.value));
 $("webhookMode").addEventListener("change", (e) => saveSetting("webhookMode", e.target.value));
 $("webhookBatchSize").addEventListener("change", (e) => {

@@ -12,9 +12,10 @@ function csvEscape(v) {
 function leadsToCsv(leads) {
   const keys = new Set();
   leads.forEach(l => Object.keys(l).forEach(k => keys.add(k)));
-  // Maps-specific preferred order
+  // Maps-specific preferred order. `allPhones` is set by deepScrapeAll and
+  // surfaces here so deep-enriched exports keep a stable column order.
   const preferred = [
-    "title", "phone", "email",
+    "title", "phone", "allPhones", "email",
     "allEmails", "facebook", "instagram", "twitter", "linkedin", "youtube", "tiktok",
     "website", "address", "category",
     "rating", "reviewCount", "hours", "domain",
@@ -28,6 +29,12 @@ function leadsToCsv(leads) {
     rows.push(headers.map(h => {
       const v = l[h];
       if (Array.isArray(v)) return csvEscape(v.join("; "));
+      // Plain objects (e.g. the nested `social` snapshot from deepScrapeAll)
+      // would otherwise stringify as "[object Object]". Serialize them as
+      // JSON so the cell is at least machine-readable.
+      if (v && typeof v === "object") {
+        try { return csvEscape(JSON.stringify(v)); } catch (_) { return csvEscape(""); }
+      }
       return csvEscape(v);
     }).join(","));
   }
@@ -46,21 +53,26 @@ const PHONE_RE = /(\+?\d[\d\s\-().]{7,}\d)/g;
 // Canonical regex source for social-media URL detection.
 // content.js mirrors these patterns (separate JS context for content scripts).
 // Keep these in sync with the SOCIAL_PATTERNS object near the top of content.js.
+//
+// YouTube alternation requires a literal `/` after `channel|user|c` so paths like
+// `youtube.com/cooking` do not match as a "c" channel. The `@` handle keeps no
+// trailing slash (it is followed directly by the username).
 const SOCIAL_PATTERNS = {
   facebook:  /https?:\/\/(?:www\.|m\.|business\.)?facebook\.com\/[A-Za-z0-9_.\-/?=&%]+/gi,
   instagram: /https?:\/\/(?:www\.)?instagram\.com\/[A-Za-z0-9_.\-/?=&%]+/gi,
   twitter:   /https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[A-Za-z0-9_.\-/?=&%]+/gi,
   linkedin:  /https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in|school)\/[A-Za-z0-9_.\-/?=&%]+/gi,
-  youtube:   /https?:\/\/(?:www\.)?youtube\.com\/(?:channel|user|c|@)[A-Za-z0-9_.\-/?=&%]+/gi,
+  youtube:   /https?:\/\/(?:www\.)?youtube\.com\/(?:(?:channel|user|c)\/|@)[A-Za-z0-9_.\-/?=&%]+/gi,
   tiktok:    /https?:\/\/(?:www\.)?tiktok\.com\/@[A-Za-z0-9_.\-/?=&%]+/gi
 };
 
 // Strip trailing punctuation and quote-like characters that often follow URLs in HTML.
+// Includes ',' and ';' which appear after bare URLs in JSON-LD blobs and visible text.
 function cleanSocialUrl(u) {
   if (!u) return u;
   let s = String(u).trim();
-  // Strip trailing quote/bracket/paren/whitespace characters
-  s = s.replace(/["'<>)\]\s]+$/g, "");
+  // Strip trailing quote/bracket/paren/comma/semicolon/whitespace characters
+  s = s.replace(/[",;'<>)\]\s]+$/g, "");
   // Strip a single trailing slash for canonical comparison (but keep e.g. /channel/UC...)
   s = s.replace(/\/+$/, "");
   return s;
@@ -112,9 +124,20 @@ function extractContactsFromHtml(html) {
   return { emails, phones, social };
 }
 
-async function fetchPage(url) {
+async function fetchPage(url, externalSignal) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 12000);
+  // If an outer caller (e.g. enrichLeadFromWebsite's overall budget) aborts,
+  // propagate the abort to this fetch so the service worker isn't tied up
+  // doing work whose result will be discarded.
+  let onExternalAbort = null;
+  if (externalSignal) {
+    if (externalSignal.aborted) ctrl.abort();
+    else {
+      onExternalAbort = () => ctrl.abort();
+      externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+    }
+  }
   try {
     const res = await fetch(url, {
       signal: ctrl.signal, redirect: "follow",
@@ -125,13 +148,25 @@ async function fetchPage(url) {
     if (!ct.includes("text/html") && !ct.includes("application/xhtml")) return null;
     return await res.text();
   } catch (_) { return null; }
-  finally { clearTimeout(t); }
+  finally {
+    clearTimeout(t);
+    if (externalSignal && onExternalAbort) {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
+  }
 }
 
 // Fetch the homepage + common contact pages of a lead's website in parallel and
 // extract emails / phones / social URLs from the combined HTML. Capped at 4 pages
 // total. Each fetchPage() has its own 12s timeout, all four run in parallel so the
-// wall-clock is bounded near ~12s; we add an overall ~25s safety wrapper.
+// wall-clock is bounded near ~12s; we add an overall ~25s safety wrapper that
+// aborts any still-in-flight fetches so the service worker isn't kept busy
+// after the budget elapses.
+//
+// Note on /contact vs /contact-us: many sites 200-redirect one to the other, so
+// both fetches can cost a round trip. We keep both because some sites only
+// publish one or the other (and the dedup at the email/social level absorbs
+// duplicate content from a redirect). If latency becomes a problem, drop one.
 async function enrichLeadFromWebsite(websiteUrl) {
   const empty = { emails: [], phones: [], social: { facebook: [], instagram: [], twitter: [], linkedin: [], youtube: [], tiktok: [] } };
   if (!websiteUrl) return empty;
@@ -146,11 +181,19 @@ async function enrichLeadFromWebsite(websiteUrl) {
     origin + "/contact-us"
   ].slice(0, 4);
 
-  // Overall safety budget so a slow site can't stall the live scrape forever.
-  const overall = new Promise(resolve => setTimeout(() => resolve("__timeout__"), 25000));
-  const fetches = Promise.all(urls.map(u => fetchPage(u).catch(() => null)));
-  const result = await Promise.race([fetches, overall]);
-  const htmls = Array.isArray(result) ? result : [];
+  // Outer budget controller: aborts every fetchPage when the 25s wall-clock
+  // elapses, so the race below doesn't leave orphan fetches running until
+  // their own 12s timeouts.
+  const outer = new AbortController();
+  const budgetTimer = setTimeout(() => outer.abort(), 25000);
+
+  let htmls;
+  try {
+    htmls = await Promise.all(urls.map(u => fetchPage(u, outer.signal).catch(() => null)));
+  } finally {
+    clearTimeout(budgetTimer);
+  }
+  if (!Array.isArray(htmls)) htmls = [];
 
   const merged = { emails: new Set(), phones: new Set(), social: { facebook: new Set(), instagram: new Set(), twitter: new Set(), linkedin: new Set(), youtube: new Set(), tiktok: new Set() } };
   for (const html of htmls) {
@@ -251,13 +294,35 @@ async function deepScrapeAll() {
 }
 
 // ===== Webhook =====
+// Validate that a webhook URL parses and uses an http(s) scheme. We accept
+// http:// because some self-hosted n8n / Zapier-style relays inside private
+// networks are http-only, but the popup surfaces a warning on the status line
+// for any non-HTTPS URL so a typo to a public http target isn't silent.
+function validateWebhookUrl(url) {
+  if (!url || typeof url !== "string") {
+    return { ok: false, error: "Webhook URL not configured" };
+  }
+  let parsed;
+  try { parsed = new URL(url); } catch (_) {
+    return { ok: false, error: "Webhook URL is not a valid URL" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: `Webhook URL must use http(s):// (got ${parsed.protocol})` };
+  }
+  return { ok: true, parsed };
+}
+
 async function postWebhook(url, body, authHeader) {
-  if (!url) return { ok: false, status: 0, error: "Webhook URL not configured" };
+  const v = validateWebhookUrl(url);
+  if (!v.ok) return { ok: false, status: 0, error: v.error };
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 12000);
   try {
     const headers = { "Content-Type": "application/json" };
     if (authHeader && String(authHeader).trim()) {
+      // The Authorization header is sent verbatim. Caller must include
+      // "Bearer " prefix if needed. Note: the value is stored in plain
+      // chrome.storage.local; document this in the popup field hint.
       headers["Authorization"] = String(authHeader).trim();
     }
     const res = await fetch(url, {
@@ -362,6 +427,10 @@ async function webhookSendAll() {
       await setProgress({ totalFound: sent });
       await new Promise(r => setTimeout(r, 200));
     }
+    // Batch send is also a flush - mark all current leads as pushed so the
+    // per-lead auto-push listener doesn't replay from index 0 after a later
+    // mode switch.
+    await chrome.storage.local.set({ webhookLastSentIndex: leads.length });
   }
 
   await setProgress({
@@ -377,6 +446,12 @@ async function webhookSendAll() {
 
 // Auto-push hook: when leads array grows AND webhookEnabled=true AND mode=per-lead,
 // POST each new lead to the webhook. Tracks webhookLastSentIndex to avoid resending.
+//
+// Watermark fragility (intentional, deferred): this slices by index and relies on
+// `leads` being strictly append-only between firings. If a future change reorders,
+// deletes, or parallelizes lead writes, switch to a per-lead `pushedAt` flag or
+// an ID set. Today saveLead() in content.js is the only writer and it always
+// pushes to the end of the array, so the watermark holds.
 async function autoPushNewLeads(oldLeads, newLeads) {
   // Only act when leads were appended
   if (!Array.isArray(newLeads) || !Array.isArray(oldLeads)) return;
@@ -571,6 +646,18 @@ chrome.runtime.onInstalled.addListener(async () => {
       }
     });
   }
+  // One-time cleanup of orphaned multi-account-rotation keys from older
+  // installs. The feature was removed; these keys are no longer read or
+  // written but linger in existing user profiles.
+  try {
+    await chrome.storage.local.remove([
+      "accounts",
+      "activeAccountIndex",
+      "accountLeadsCount",
+      "accountRotationThreshold",
+      "lastRotation"
+    ]);
+  } catch (_) { /* best effort */ }
   // Setup alarms
   chrome.alarms.create("captcha-cooldown-check", { periodInMinutes: 1 });
   chrome.alarms.create("midnight-reset", { periodInMinutes: 60 });
