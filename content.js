@@ -321,30 +321,44 @@
       if (tel) out.phone = tel.href.replace(/^tel:/, "").trim();
     }
     const mailto = document.querySelector('a[href^="mailto:"]');
-    if (mailto) out.email = mailto.href.replace(/^mailto:/, "").trim();
-
-    // Visible-text email regex on the detail panel. Maps rarely surfaces an
-    // email in plain text, but the brief calls for this scan in addition to
-    // the mailto: anchor and the website-fetch path. Collect every match so
-    // panel-derived emails join the dedup set with website-fetch emails.
-    const emailHits = [];
-    const panelForEmail = document.querySelector('div[role="main"]') || document.body;
-    if (panelForEmail) {
-      const panelText = panelForEmail.innerText || "";
-      EMAIL_RE.lastIndex = 0;
-      const matches = panelText.match(EMAIL_RE) || [];
-      const seen = new Set();
-      for (const raw of matches) {
-        const e = String(raw).toLowerCase();
-        if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(e)) continue;
-        if (seen.has(e)) continue;
-        seen.add(e);
-        emailHits.push(e);
-      }
+    if (mailto) {
+      out.email = mailto.href.replace(/^mailto:/, "").trim();
+      // Seed out.allEmails with the mailto value so the dedup set in
+      // runMapsCampaign (and downstream consumers) starts from a trusted
+      // base. Without this, a later assignment would drop the mailto value
+      // from allEmails even though it survives in out.email.
+      if (out.email) out.allEmails = [out.email];
     }
-    if (emailHits.length) {
-      if (!out.email) out.email = emailHits[0];
-      out.allEmails = emailHits;
+
+    // Visible-text email regex scan as a last-resort signal. div[role="main"]
+    // on a Maps detail page also contains user-submitted reviews and Q&A,
+    // which can mention emails that don't belong to the business (review
+    // false-positives, see v2 semantic review issue #1). To bound the
+    // false-positive risk we only consume panel-text hits when there's
+    // nothing better to fall back on: no mailto: anchor AND no website to
+    // scrape via background.js. If a website is set, enrichLeadFromWebsite
+    // will pull emails from the homepage / contact pages where the
+    // attribution is reliable.
+    if (!out.email && !out.website) {
+      const emailHits = [];
+      const panelForEmail = document.querySelector('div[role="main"]') || document.body;
+      if (panelForEmail) {
+        const panelText = panelForEmail.innerText || "";
+        EMAIL_RE.lastIndex = 0;
+        const matches = panelText.match(EMAIL_RE) || [];
+        const seen = new Set();
+        for (const raw of matches) {
+          const e = String(raw).toLowerCase();
+          if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(e)) continue;
+          if (seen.has(e)) continue;
+          seen.add(e);
+          emailHits.push(e);
+        }
+      }
+      if (emailHits.length) {
+        out.email = emailHits[0];
+        out.allEmails = emailHits;
+      }
     }
 
     // Domain

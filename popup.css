@@ -605,6 +605,11 @@ textarea::placeholder, input::placeholder {
   background: #dcfce7;
   border-color: #bbf7d0;
 }
+.webhook-status.warn {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
 .webhook-status.err {
   color: #991b1b;
   background: #fee2e2;

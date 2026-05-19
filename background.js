@@ -98,6 +98,35 @@ function extractSocialFromHtml(html) {
   return out;
 }
 
+// Merge two social objects {facebook:[...], instagram:[...], ...} into a new
+// object with deduped, existing-first ordering per platform. Mirrors the
+// helper of the same name in content.js. We duplicate it here because the
+// service worker and content scripts are separate JS contexts in MV3 and
+// there is no shared module.
+function mergeSocialObjects(a, b) {
+  const platforms = ["facebook", "instagram", "twitter", "linkedin", "youtube", "tiktok"];
+  const merged = {};
+  for (const platform of platforms) {
+    const seen = new Set();
+    const list = [];
+    const push = (arr) => {
+      if (!arr) return;
+      for (const raw of arr) {
+        const u = cleanSocialUrl(raw);
+        if (!u) continue;
+        const key = u.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        list.push(u);
+      }
+    };
+    push(a && a[platform]);
+    push(b && b[platform]);
+    merged[platform] = list;
+  }
+  return merged;
+}
+
 function extractContactsFromHtml(html) {
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -259,19 +288,40 @@ async function deepScrapeAll() {
       const { emails, phones, social } = enriched;
 
       if (emails.length && !lead.email) lead.email = emails[0];
-      lead.allEmails = emails;
+      // Merge website-fetch emails with any panel-derived allEmails captured
+      // at live-scrape time (existing-first, Set dedupe). Previously this
+      // unconditionally overwrote lead.allEmails which dropped panel hits on
+      // a later deep-enrich pass (v2 review issue #3).
+      {
+        const existing = Array.isArray(lead.allEmails) ? lead.allEmails : [];
+        const seen = new Set();
+        const mergedEmails = [];
+        for (const e of [...existing, ...emails]) {
+          const k = String(e).toLowerCase();
+          if (seen.has(k)) continue;
+          seen.add(k);
+          mergedEmails.push(e);
+        }
+        lead.allEmails = mergedEmails;
+      }
       if (phones.length && !lead.phone) lead.phone = phones[0];
       lead.allPhones = phones;
-      lead.social = social;
+      // Merge website-fetch social with any panel-anchor social captured at
+      // live-scrape time (existing-first, deduped per platform). Same pattern
+      // as runMapsCampaign uses on the content side (v2 review issue #3).
+      const mergedSocial = mergeSocialObjects(lead.social || {}, social);
+      lead.social = mergedSocial;
       // Flat per-platform fields (first match) for simpler CSV columns.
-      for (const platform of Object.keys(social)) {
-        if (social[platform] && social[platform].length) {
-          lead[platform] = social[platform][0];
+      // Preserve any value already on the lead so deep-enrich doesn't
+      // overwrite a panel-anchor URL with a website-fetch alternative.
+      for (const platform of Object.keys(mergedSocial)) {
+        if (mergedSocial[platform] && mergedSocial[platform].length && !lead[platform]) {
+          lead[platform] = mergedSocial[platform][0];
         }
       }
       lead.deepScrapedAt = new Date().toISOString();
 
-      const socialCount = Object.values(social).reduce((n, arr) => n + (arr ? arr.length : 0), 0);
+      const socialCount = Object.values(mergedSocial).reduce((n, arr) => n + (arr ? arr.length : 0), 0);
       if (emails.length || phones.length || socialCount) {
         updated++;
         totalContacts += emails.length + phones.length + socialCount;

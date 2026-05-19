@@ -480,8 +480,9 @@ async function loadWebhookSettings() {
 function setWebhookStatus(text, kind) {
   const el = $("webhookStatus");
   el.textContent = text || "";
-  el.classList.remove("ok", "err");
+  el.classList.remove("ok", "warn", "err");
   if (kind === "ok") el.classList.add("ok");
+  else if (kind === "warn") el.classList.add("warn");
   else if (kind === "err") el.classList.add("err");
 }
 
@@ -506,7 +507,7 @@ function checkWebhookUrlScheme(url) {
   if (parsed.protocol === "http:") {
     setWebhookStatus(
       "Warning: non-HTTPS webhook URL. Lead data will be sent unencrypted.",
-      "err"
+      "warn"
     );
     return { ok: true, warn: true };
   }
